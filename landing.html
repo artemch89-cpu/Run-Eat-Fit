@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Run-Eat-Fit - Умный консультант вашего состояния</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --color-primary: #6366f1;
+            --color-secondary: #a78bfa;
+            --color-dark: #0f172a;
+            --color-dark-light: #1e293b;
+            --color-text: #e2e8f0;
+            --color-text-secondary: #cbd5e1;
+            --color-accent: #ec4899;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, var(--color-dark) 0%, #1a1f3a 50%, var(--color-dark) 100%);
+            color: var(--color-text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Фоновая анимация */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(168, 85, 247, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Навигация */
+        header {
+            text-align: center;
+            padding: 40px 20px 20px;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        /* Герой секция */
+        .hero {
+            text-align: center;
+            padding: 60px 20px 40px;
+        }
+
+        .hero h1 {
+            font-size: clamp(28px, 5vw, 48px);
+            font-weight: 800;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #60a5fa 0%, var(--color-secondary) 50%, var(--color-accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            font-size: clamp(16px, 2vw, 18px);
+            color: var(--color-text-secondary);
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+
+        /* Преимущества */
+        .benefits {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin: 80px 0;
+            padding: 40px 20px;
+        }
+
+        .benefit-card {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 16px;
+            padding: 40px 30px;
+            text-align: center;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .benefit-card:hover {
+            transform: translateY(-8px);
+            border-color: rgba(99, 102, 241, 0.5);
+            box-shadow: 0 20px 40px rgba(99, 102, 241, 0.2);
+        }
+
+        .benefit-icon {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 20px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.3s ease;
+        }
+
+        .benefit-card:hover .benefit-icon {
+            transform: scale(1.1) rotate(5deg);
+        }
+
+        .benefit-card h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: var(--color-text);
+        }
+
+        .benefit-card p {
+            color: var(--color-text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        /* Целевая аудитория */
+        .audience {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 16px;
+            padding: 40px 30px;
+            text-align: center;
+            margin: 60px 0;
+            backdrop-filter: blur(10px);
+        }
+
+        .audience h2 {
+            font-size: clamp(20px, 3vw, 28px);
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .audience p {
+            font-size: 16px;
+            color: var(--color-text-secondary);
+            max-width: 700px;
+            margin: 0 auto;
+            line-height: 1.8;
+        }
+
+        /* CTA Секция */
+        .cta-section {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 16px 40px;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            color: white;
+            text-decoration: none;
+            border: none;
+            border-radius: 50px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        .cta-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 15px 40px rgba(99, 102, 241, 0.5);
+        }
+
+        .cta-button:active {
+            transform: scale(0.98);
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
+            }
+            50% {
+                box-shadow: 0 10px 50px rgba(99, 102, 241, 0.6);
+            }
+        }
+
+        .contact-info {
+            margin-top: 30px;
+            font-size: 14px;
+            color: var(--color-text-secondary);
+        }
+
+        .contact-info a {
+            color: var(--color-secondary);
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.3s ease;
+        }
+
+        .contact-info a:hover {
+            color: var(--color-accent);
+        }
+
+        /* Подвал */
+        footer {
+            text-align: center;
+            padding: 40px 20px 30px;
+            color: var(--color-text-secondary);
+            font-size: 12px;
+            border-top: 1px solid rgba(99, 102, 241, 0.1);
+            margin-top: 40px;
+        }
+
+        /* Мобильная адаптивность */
+        @media (max-width: 768px) {
+            header {
+                padding: 30px 20px 15px;
+            }
+
+            .logo {
+                font-size: 24px;
+            }
+
+            .hero {
+                padding: 40px 20px 30px;
+            }
+
+            .hero h1 {
+                font-size: 32px;
+            }
+
+            .benefits {
+                gap: 20px;
+                margin: 60px 0;
+                padding: 30px 10px;
+            }
+
+            .benefit-card {
+                padding: 30px 20px;
+            }
+
+            .audience {
+                margin: 40px 0;
+                padding: 30px 20px;
+            }
+
+            .cta-section {
+                padding: 40px 20px;
+            }
+
+            .cta-button {
+                padding: 14px 32px;
+                font-size: 16px;
+            }
+        }
+
+        /* Плавное появление элементов */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        header, .hero, .benefits, .audience, .cta-section {
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .benefit-card {
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .benefit-card:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .benefit-card:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">🏃 Run-Eat-Fit</div>
+        </header>
+
+        <section class="hero">
+            <h1>Умный консультант вашего состояния</h1>
+            <p>Ваш AI-ассистент в телеграмме-боте для мониторинга и корректировки вашего состояния</p>
+        </section>
+
+        <section class="benefits">
+            <div class="benefit-card">
+                <div class="benefit-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 2C8.27 2 2 8.27 2 16s6.27 14 14 14 14-6.27 14-14S23.73 2 16 2zm0 24c-5.52 0-10-4.48-10-10S10.48 6 16 6s10 4.48 10 10-4.48 10-10 10zm3-14h-4v-3c0-.55-.45-1-1-1s-1 .45-1 1v3h-3c-.55 0-1 .45-1 1s.45 1 1 1h3v4c0 .55.45 1 1 1s1-.45 1-1v-4h4c.55 0 1-.45 1-1s-.45-1-1-1z" fill="white"/>
+                    </svg>
+                </div>
+                <h3>Автоматическая синхронизация</h3>
+                <p>Ваша активность автоматически загружается с ваших умных устройств. Никаких ручных вводов!</p>
+            </div>
+
+            <div class="benefit-card">
+                <div class="benefit-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 2C8.27 2 2 8.27 2 16s6.27 14 14 14 14-6.27 14-14S23.73 2 16 2zm0 24c-5.52 0-10-4.48-10-10S10.48 6 16 6s10 4.48 10 10-4.48 10-10 10zm-1-15h2v6h-2zm0 8h2v2h-2z" fill="white"/>
+                    </svg>
+                </div>
+                <h3>Анализ питания по фото</h3>
+                <p>Определения вашего питания прямо по фотографии. AI мгновенно распознает состав блюда!</p>
+            </div>
+
+            <div class="benefit-card">
+                <div class="benefit-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 2C8.27 2 2 8.27 2 16s6.27 14 14 14 14-6.27 14-14S23.73 2 16 2zm-2 19h4v2h-4zm0-6h4v5h-4zm0-8h4v4h-4z" fill="white"/>
+                    </svg>
+                </div>
+                <h3>Персональные рекомендации</h3>
+                <p>Создание рекомендаций исходя из ваших личных целей и предпочтений. Ваш собственный фитнес-тренер!</p>
+            </div>
+        </section>
+
+        <section class="audience">
+            <h2>Для кого это идеально?</h2>
+            <p>Подходит для всех, кто хочет позаботиться о своем здоровье — от молодых спортсменов, стремящихся к новым результатам, до опытных людей, мечтающих о бодрости духа и активной жизни. Неважно, ваша цель — похудение, набор мышечной массы или просто здоровый образ жизни — Run-Eat-Fit станет вашим надежным помощником на этом пути.</p>
+        </section>
+
+        <section class="cta-section">
+            <a href="https://t.me/artemch89" class="cta-button">Подключи персонального бота в Телеграм</a>
+
+            <div class="contact-info">
+                <p>Интересующие вопросы можете задать в ТГ: <a href="https://t.me/artemch89">@artemch89</a></p>
+            </div>
+        </section>
+
+        <footer>
+            <p>&copy; 2024 Run-Eat-Fit. Все права защищены. Ваш персональный AI-консультант для здорового образа жизни.</p>
+        </footer>
+    </div>
+</body>
+</html>
