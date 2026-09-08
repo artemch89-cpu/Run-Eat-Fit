@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
-import { createUser, getUser, updateUser } from './db.js';
+import { createUser, getUser, updateUser, addMessage, getHistory } from './db.js';
 import { getNextStep, buildQuestion, parseCheckinTime, completionMessage } from './onboarding.js';
+import { getCoachReply } from './coach.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -43,7 +44,17 @@ bot.on('text', async (ctx) => {
     return askNextStep(ctx, ctx.from.id);
   }
   if (step) return;
-  ctx.reply('Онбординг уже пройден. Диалог с коучем скоро появится здесь.');
+
+  addMessage(ctx.from.id, 'user', ctx.message.text);
+  const history = getHistory(ctx.from.id);
+  try {
+    const reply = await getCoachReply(user, history);
+    addMessage(ctx.from.id, 'assistant', reply);
+    ctx.reply(reply);
+  } catch (err) {
+    console.error('Coach reply error:', err);
+    ctx.reply('Не получилось ответить — сбой на моей стороне. Попробуй ещё раз чуть позже.');
+  }
 });
 
 bot.launch();
