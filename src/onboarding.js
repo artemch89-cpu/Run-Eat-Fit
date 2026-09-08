@@ -18,10 +18,11 @@ const QUESTIONS = {
     ],
   },
   tone: {
-    text: 'Как с тобой общаться — жёстко или мягко?',
+    text: 'Какой тренер тебе нужен?',
     options: [
-      ['Строго', 'строгий'],
-      ['Мягко', 'мягкий'],
+      ['Строгий, но справедливый', 'строгий'],
+      ['Тренер-партнёр', 'партнёр'],
+      ['Мягкий и бережный', 'мягкий'],
     ],
   },
 };
@@ -39,7 +40,7 @@ export function buildQuestion(field) {
   return {
     text: q.text,
     keyboard: {
-      inline_keyboard: [q.options.map(([label, value]) => ({ text: label, callback_data: `${field}:${value}` }))],
+      inline_keyboard: q.options.map(([label, value]) => [{ text: label, callback_data: `${field}:${value}` }]),
     },
   };
 }
