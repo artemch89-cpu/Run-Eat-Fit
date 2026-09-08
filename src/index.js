@@ -1,12 +1,49 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
-import { createUser } from './db.js';
+import { createUser, getUser, updateUser } from './db.js';
+import { getNextStep, buildQuestion, parseCheckinTime, completionMessage } from './onboarding.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
+async function askNextStep(ctx, telegramId) {
+  const user = getUser(telegramId);
+  const step = getNextStep(user);
+  if (!step) {
+    return ctx.reply(completionMessage());
+  }
+  if (step === 'checkin_time') {
+    return ctx.reply('В какое время тебе удобно, чтобы я писал первым? Формат ЧЧ:ММ, например 08:00');
+  }
+  const { text, keyboard } = buildQuestion(step);
+  return ctx.reply(text, { reply_markup: keyboard });
+}
+
 bot.start((ctx) => {
   createUser(ctx.from.id);
-  ctx.reply('Привет! Я твой персональный тренер. Онбординг скоро появится здесь.');
+  askNextStep(ctx, ctx.from.id);
+});
+
+bot.action(/^(goal|activity|tone):(.+)$/, async (ctx) => {
+  const [, field, value] = ctx.match;
+  updateUser(ctx.from.id, field, value);
+  await ctx.answerCbQuery();
+  await askNextStep(ctx, ctx.from.id);
+});
+
+bot.on('text', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (!user) return;
+  const step = getNextStep(user);
+  if (step === 'checkin_time') {
+    const time = parseCheckinTime(ctx.message.text);
+    if (!time) {
+      return ctx.reply('Не понял формат. Напиши время как ЧЧ:ММ, например 08:00');
+    }
+    updateUser(ctx.from.id, 'checkin_time', time);
+    return askNextStep(ctx, ctx.from.id);
+  }
+  if (step) return;
+  ctx.reply('Онбординг уже пройден. Диалог с коучем скоро появится здесь.');
 });
 
 bot.launch();
