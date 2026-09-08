@@ -22,4 +22,14 @@ export function createUser(telegramId) {
   return getUser(telegramId);
 }
 
+const ONBOARDING_FIELDS = ['goal', 'activity', 'tone', 'checkin_time'];
+
+export function updateUser(telegramId, field, value) {
+  if (!ONBOARDING_FIELDS.includes(field)) {
+    throw new Error(`Unknown onboarding field: ${field}`);
+  }
+  db.prepare(`UPDATE users SET ${field} = ? WHERE telegram_id = ?`).run(value, telegramId);
+  return getUser(telegramId);
+}
+
 export default db;
