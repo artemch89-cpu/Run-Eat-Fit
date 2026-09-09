@@ -23,6 +23,12 @@ db.exec(`
   )
 `);
 
+try {
+  db.exec('ALTER TABLE users ADD COLUMN last_checkin_date TEXT');
+} catch {
+  // колонка уже есть — ALTER TABLE ADD COLUMN IF NOT EXISTS в SQLite не поддерживается
+}
+
 export function getUser(telegramId) {
   return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
 }
@@ -51,6 +57,21 @@ export function getHistory(telegramId, limit = 20) {
     .prepare('SELECT role, content FROM messages WHERE telegram_id = ? ORDER BY id DESC LIMIT ?')
     .all(telegramId, limit);
   return rows.reverse();
+}
+
+export function getUsersDueForCheckin(hhmm, today) {
+  return db
+    .prepare(
+      `SELECT * FROM users
+       WHERE checkin_time = ?
+         AND goal IS NOT NULL AND activity IS NOT NULL AND tone IS NOT NULL
+         AND (last_checkin_date IS NULL OR last_checkin_date != ?)`,
+    )
+    .all(hhmm, today);
+}
+
+export function markCheckinSent(telegramId, today) {
+  db.prepare('UPDATE users SET last_checkin_date = ? WHERE telegram_id = ?').run(today, telegramId);
 }
 
 export default db;
