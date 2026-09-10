@@ -355,16 +355,26 @@ function correctDateMentions(text) {
   return fixed;
 }
 
-async function callCoach(user, messages) {
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-5',
-    max_tokens: 4000,
-    thinking: { type: 'disabled' },
+const COACH_MODEL = 'claude-haiku-4-5';
+const COACH_MAX_TOKENS = 1500;
+const COACH_MAX_TOKENS_RETRY = 3000;
+
+function requestCoach(user, messages, maxTokens) {
+  // Без параметра thinking — у Haiku 4.5 это и есть режим «без рассуждений»
+  // (у неё нет type:disabled; включается только через budget_tokens).
+  return anthropic.messages.create({
+    model: COACH_MODEL,
+    max_tokens: maxTokens,
     system: buildSystemPrompt(user),
     tools: [PLAN_TOOL, FITNESS_TEST_TOOL],
     messages: appendDayAnchor(user, messages),
   });
+}
 
+// Разбирает ответ модели: применяет вызовы инструментов, возвращает текст для
+// пользователя. null — если модель не дала ничего пригодного (ни текста, ни
+// инструмента); тогда callCoach решает, повторять или падать.
+function extractReply(user, response) {
   let calledTool = false;
   for (const block of response.content) {
     if (block.type === 'tool_use' && block.name === 'update_plan') {
@@ -378,14 +388,31 @@ async function callCoach(user, messages) {
   }
 
   const textBlocks = response.content.filter((block) => block.type === 'text');
-  if (textBlocks.length === 0) {
-    if (calledTool) {
-      return 'Обновил план.';
-    }
-    throw new Error(`No text block in coach response (stop_reason: ${response.stop_reason})`);
+  if (textBlocks.length > 0) {
+    const rawText = textBlocks.map((block) => block.text).join('\n\n');
+    return markdownToTelegramHtml(correctDateMentions(rawText));
   }
-  const rawText = textBlocks.map((block) => block.text).join('\n\n');
-  return markdownToTelegramHtml(correctDateMentions(rawText));
+  if (calledTool) {
+    return 'Обновил план.';
+  }
+  return null;
+}
+
+async function callCoach(user, messages) {
+  let response = await requestCoach(user, messages, COACH_MAX_TOKENS);
+  let reply = extractReply(user, response);
+
+  // Упёрлись в лимит и не успели выдать ни текст, ни вызов инструмента —
+  // один повтор с запасом по токенам.
+  if (reply === null && response.stop_reason === 'max_tokens') {
+    response = await requestCoach(user, messages, COACH_MAX_TOKENS_RETRY);
+    reply = extractReply(user, response);
+  }
+
+  if (reply === null) {
+    throw new Error(`Пустой ответ коуча (stop_reason: ${response.stop_reason})`);
+  }
+  return reply;
 }
 
 export async function getCoachReply(user, history) {
