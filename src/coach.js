@@ -27,6 +27,30 @@ function formatNow() {
   return `${weekday}, ${date}, ${time}`;
 }
 
+function belgradeTodayISO() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: BOT_TIMEZONE });
+}
+
+// Дата-арифметика по строке ГГГГ-ММ-ДД: полдень UTC, чтобы переход на летнее
+// время не сдвигал день.
+function addDaysISO(iso, days) {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function ddmm(iso) {
+  const [, m, d] = iso.split('-');
+  return `${d}.${m}`;
+}
+
+// getUTCDay(): 0=вс .. 6=сб → колонка таблицы weekly_plan
+const DOW_TO_COLUMN = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function isoWeekdayColumn(iso) {
+  return DOW_TO_COLUMN[new Date(`${iso}T12:00:00Z`).getUTCDay()];
+}
+
 const WEEKDAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const WEEKDAY_LABELS = {
   monday: 'Понедельник',
@@ -77,33 +101,47 @@ function applyPlanToolCall(telegramId, input) {
   }
 }
 
-function formatPlanSection(user) {
+// Календарь отдаём модели уже СВЕДЁННЫМ: на каждый день одна строка, разовые
+// исключения уже наложены на постоянную схему. Модель ничего не вычисляет и не
+// сопоставляет — просто читает строку нужного дня. Это убирает класс ошибок
+// «взял тренировку не того дня» (модель тянулась к тому, что обсуждали недавно).
+const PLAN_WINDOW_DAYS = 14;
+
+export function formatPlanSection(user) {
   const plan = getWeeklyPlan(user.telegram_id);
-  const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: BOT_TIMEZONE });
-  const overrides = getActiveOverrides(user.telegram_id, todayISO);
+  const today = belgradeTodayISO();
+  const overrides = getActiveOverrides(user.telegram_id, today);
+  const overrideByDate = new Map(overrides.map((o) => [o.date, o.workout]));
 
-  const templateLines = WEEKDAY_ORDER.map((day) => `- ${WEEKDAY_LABELS[day]}: ${plan?.[day] ?? 'не задано'}`).join('\n');
+  const hasTemplate = plan && WEEKDAY_ORDER.some((day) => plan[day]);
+  if (!hasTemplate && overrides.length === 0) {
+    return 'Текущий план тренировок: ещё не составлен. Если пользователь просит план или расписание — составь его и сохрани через update_plan.';
+  }
 
-  const overrideLines = overrides.length
-    ? overrides
-        .map((o) => {
-          const d = new Date(`${o.date}T12:00:00`);
-          const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long', timeZone: BOT_TIMEZONE });
-          const dm = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: BOT_TIMEZONE });
-          return `- ${dm} (${weekday}): ${o.workout}`;
-        })
-        .join('\n')
-    : '— нет активных исключений';
+  const lastWindowISO = addDaysISO(today, PLAN_WINDOW_DAYS - 1);
+  const rows = [];
+  for (let i = 0; i < PLAN_WINDOW_DAYS; i++) {
+    const iso = addDaysISO(today, i);
+    const col = isoWeekdayColumn(iso);
+    const prefix = i === 0 ? 'СЕГОДНЯ, ' : i === 1 ? 'ЗАВТРА, ' : '';
+    const changed = overrideByDate.has(iso);
+    const workout = changed ? overrideByDate.get(iso) : plan?.[col] || 'тренировки нет';
+    rows.push(`- ${prefix}${WEEKDAY_LABELS[col]} ${ddmm(iso)}: ${workout}${changed ? '  [разовое изменение на этот день]' : ''}`);
+  }
 
-  return `Текущий план тренировок (структурированные данные — источник правды, не переопределяй его домыслами из истории разговора):
+  const beyond = overrides
+    .filter((o) => o.date > lastWindowISO)
+    .map((o) => `- ${WEEKDAY_LABELS[isoWeekdayColumn(o.date)]} ${ddmm(o.date)}: ${o.workout}`);
 
-Постоянная недельная схема:
-${templateLines}
+  return `Текущий план тренировок — готовый календарь (постоянная недельная схема и разовые изменения на даты уже сведены вместе):
 
-Разовые исключения на конкретные даты (действуют только в указанный день, не меняют постоянную схему; уже прошедшие даты здесь не показаны):
-${overrideLines}
+${rows.join('\n')}${beyond.length ? `\n\nДальше по датам:\n${beyond.join('\n')}` : ''}
 
-Когда называешь тренировку на сегодня/завтра/любой конкретный день — сначала проверь, нет ли разового исключения на эту дату; если есть, используй его; если нет — бери постоянную схему для этого дня недели.`;
+Как отвечать про тренировки:
+- Называешь тренировку на день — бери строку этого дня из календаря дословно. Не складывай соседние дни и ничего не переноси сам, всё уже сведено.
+- Если в строке сказано, что тренировка отменена или перенесена — так и передай, не подставляй туда тренировку другого дня.
+- Это источник правды о плане, а не переписка выше.
+- Меняешь план или ставишь разовое исключение — вызови update_plan.`;
 }
 
 const FITNESS_TEST_TOOL = {
