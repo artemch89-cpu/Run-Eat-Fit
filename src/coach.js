@@ -144,6 +144,41 @@ ${rows.join('\n')}${beyond.length ? `\n\nДальше по датам:\n${beyond
 - Меняешь план или ставишь разовое исключение — вызови update_plan.`;
 }
 
+// Короткая выжимка на 3 дня. Приклеивается к последнему сообщению пользователя
+// в самом вызове API (не в БД) — это последнее, что модель видит перед ответом,
+// поэтому рекенси работает на нас: свежий факт бьёт «что обсуждали 2 реплики назад».
+export function buildDayAnchor(user) {
+  const plan = getWeeklyPlan(user.telegram_id);
+  const today = belgradeTodayISO();
+  const overrides = getActiveOverrides(user.telegram_id, today);
+  const overrideByDate = new Map(overrides.map((o) => [o.date, o.workout]));
+
+  const hasPlan = (plan && WEEKDAY_ORDER.some((day) => plan[day])) || overrides.length > 0;
+  if (!hasPlan) return '';
+
+  const lines = ['сегодня', 'завтра', 'послезавтра'].map((label, i) => {
+    const iso = addDaysISO(today, i);
+    const col = isoWeekdayColumn(iso);
+    const workout = overrideByDate.get(iso) ?? plan?.[col] ?? 'тренировки нет';
+    return `${label} (${WEEKDAY_LABELS[col]} ${ddmm(iso)}) — ${workout}`;
+  });
+
+  return `[Служебный контекст, не сообщение пользователя. Сверяйся с этим, а не с обсуждением выше:
+${lines.join('\n')}
+Спрашивают про день из этого списка — отвечай ровно этой строкой. Отменено/перенесено — так и говори.]`;
+}
+
+// Приклеить выжимку к последнему сообщению пользователя. Не трогаем сигнал
+// чек-ина (он должен остаться «ровно [[DAILY_CHECKIN]]») и пустую выжимку.
+function appendDayAnchor(user, messages) {
+  const anchor = buildDayAnchor(user);
+  const last = messages[messages.length - 1];
+  if (!anchor || !last || last.role !== 'user' || last.content === CHECKIN_TRIGGER) {
+    return messages;
+  }
+  return [...messages.slice(0, -1), { ...last, content: `${last.content}\n\n${anchor}` }];
+}
+
 const FITNESS_TEST_TOOL = {
   name: 'save_fitness_test_results',
   description:
@@ -327,7 +362,7 @@ async function callCoach(user, messages) {
     thinking: { type: 'disabled' },
     system: buildSystemPrompt(user),
     tools: [PLAN_TOOL, FITNESS_TEST_TOOL],
-    messages,
+    messages: appendDayAnchor(user, messages),
   });
 
   let calledTool = false;
