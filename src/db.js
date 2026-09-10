@@ -29,6 +29,48 @@ try {
   // колонка уже есть — ALTER TABLE ADD COLUMN IF NOT EXISTS в SQLite не поддерживается
 }
 
+for (const column of ['age', 'gender', 'weight', 'height']) {
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+  } catch {
+    // колонка уже есть
+  }
+}
+
+for (const column of ['fitness_test_pushups', 'fitness_test_plank', 'fitness_test_resting_hr', 'fitness_test_run', 'fitness_test_last_offered_at']) {
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+  } catch {
+    // колонка уже есть
+  }
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN fitness_test_offer_count INTEGER DEFAULT 0');
+} catch {
+  // колонка уже есть
+}
+
+const WEEKDAY_COLUMNS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS weekly_plan (
+    telegram_id INTEGER PRIMARY KEY,
+    ${WEEKDAY_COLUMNS.map((d) => `${d} TEXT`).join(',\n    ')},
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS plan_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    workout TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(telegram_id, date)
+  )
+`);
+
 export function getUser(telegramId) {
   return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
 }
@@ -38,7 +80,7 @@ export function createUser(telegramId) {
   return getUser(telegramId);
 }
 
-const ONBOARDING_FIELDS = ['goal', 'activity', 'tone', 'checkin_time'];
+const ONBOARDING_FIELDS = ['goal', 'age', 'gender', 'weight', 'height', 'activity', 'tone', 'checkin_time'];
 
 export function updateUser(telegramId, field, value) {
   if (!ONBOARDING_FIELDS.includes(field)) {
@@ -72,6 +114,50 @@ export function getUsersDueForCheckin(hhmm, today) {
 
 export function markCheckinSent(telegramId, today) {
   db.prepare('UPDATE users SET last_checkin_date = ? WHERE telegram_id = ?').run(today, telegramId);
+}
+
+export function getWeeklyPlan(telegramId) {
+  return db.prepare('SELECT * FROM weekly_plan WHERE telegram_id = ?').get(telegramId);
+}
+
+export function upsertWeeklyPlan(telegramId, updates) {
+  const fields = Object.keys(updates).filter((k) => WEEKDAY_COLUMNS.includes(k));
+  if (fields.length === 0) return;
+  db.prepare('INSERT OR IGNORE INTO weekly_plan (telegram_id) VALUES (?)').run(telegramId);
+  const setClause = fields.map((f) => `${f} = ?`).join(', ');
+  db.prepare(`UPDATE weekly_plan SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?`).run(
+    ...fields.map((f) => updates[f]),
+    telegramId,
+  );
+}
+
+export function getActiveOverrides(telegramId, fromDate) {
+  return db
+    .prepare('SELECT date, workout FROM plan_overrides WHERE telegram_id = ? AND date >= ? ORDER BY date ASC')
+    .all(telegramId, fromDate);
+}
+
+export function upsertOverride(telegramId, date, workout) {
+  db.prepare(
+    `INSERT INTO plan_overrides (telegram_id, date, workout) VALUES (?, ?, ?)
+     ON CONFLICT(telegram_id, date) DO UPDATE SET workout = excluded.workout`,
+  ).run(telegramId, date, workout);
+}
+
+export function saveFitnessTestResults(telegramId, results) {
+  const fields = ['pushups', 'plank', 'resting_hr', 'run'].filter((f) => results[f]);
+  if (fields.length === 0) return;
+  const setClause = fields.map((f) => `fitness_test_${f} = ?`).join(', ');
+  db.prepare(`UPDATE users SET ${setClause} WHERE telegram_id = ?`).run(
+    ...fields.map((f) => results[f]),
+    telegramId,
+  );
+}
+
+export function markFitnessTestOffered(telegramId, todayISO) {
+  db.prepare(
+    'UPDATE users SET fitness_test_last_offered_at = ?, fitness_test_offer_count = COALESCE(fitness_test_offer_count, 0) + 1 WHERE telegram_id = ?',
+  ).run(todayISO, telegramId);
 }
 
 export default db;

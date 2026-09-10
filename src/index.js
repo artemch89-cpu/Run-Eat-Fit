@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { createUser, getUser, updateUser, addMessage, getHistory, getUsersDueForCheckin, markCheckinSent } from './db.js';
-import { getNextStep, buildQuestion, parseCheckinTime, completionMessage } from './onboarding.js';
+import { getNextStep, buildQuestion, isTextStep, getTextStepPrompt, getTextStepError, parseTextStep, completionMessage } from './onboarding.js';
 import { getCoachReply, getCheckinTrigger, BOT_TIMEZONE } from './coach.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -62,8 +62,8 @@ async function askNextStep(ctx, telegramId) {
   if (!step) {
     return ctx.reply(completionMessage());
   }
-  if (step === 'checkin_time') {
-    return ctx.reply('В какое время тебе удобно, чтобы я писал первым? Формат ЧЧ:ММ, например 08:00');
+  if (isTextStep(step)) {
+    return ctx.reply(getTextStepPrompt(step));
   }
   const { text, keyboard } = buildQuestion(step);
   return ctx.reply(text, { reply_markup: keyboard });
@@ -74,7 +74,7 @@ bot.start((ctx) => {
   askNextStep(ctx, ctx.from.id);
 });
 
-bot.action(/^(goal|activity|tone):(.+)$/, async (ctx) => {
+bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   const [, field, value] = ctx.match;
   updateUser(ctx.from.id, field, value);
   await ctx.answerCbQuery();
@@ -85,12 +85,12 @@ bot.on('text', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user) return;
   const step = getNextStep(user);
-  if (step === 'checkin_time') {
-    const time = parseCheckinTime(ctx.message.text);
-    if (!time) {
-      return ctx.reply('Не понял формат. Напиши время как ЧЧ:ММ, например 08:00');
+  if (isTextStep(step)) {
+    const value = parseTextStep(step, ctx.message.text);
+    if (!value) {
+      return ctx.reply(getTextStepError(step));
     }
-    updateUser(ctx.from.id, 'checkin_time', time);
+    updateUser(ctx.from.id, step, value);
     return askNextStep(ctx, ctx.from.id);
   }
   if (step) return;
@@ -112,5 +112,12 @@ console.log('Run Eat Fit bot started');
 
 setInterval(checkinTick, 60 * 1000);
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+function shutdown(signal) {
+  bot.stop(signal);
+  // setInterval планировщика держит event loop живым — без явного exit
+  // процесс не завершается сам по себе даже после graceful stop.
+  process.exit(0);
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));

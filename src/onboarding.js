@@ -1,4 +1,4 @@
-const STEP_ORDER = ['goal', 'activity', 'tone', 'checkin_time'];
+const STEP_ORDER = ['goal', 'age', 'gender', 'weight', 'height', 'activity', 'tone', 'checkin_time'];
 
 const QUESTIONS = {
   goal: {
@@ -8,6 +8,13 @@ const QUESTIONS = {
       ['Бег', 'бег'],
       ['Подтягивания', 'подтягивания'],
       ['Другое', 'другое'],
+    ],
+  },
+  gender: {
+    text: 'Какой у тебя пол? Нужно для точного расчёта темпа, калорий и нагрузки.',
+    options: [
+      ['Мужской', 'мужской'],
+      ['Женский', 'женский'],
     ],
   },
   activity: {
@@ -27,12 +34,63 @@ const QUESTIONS = {
   },
 };
 
+function parseAge(input) {
+  const n = Number(input.trim());
+  if (!Number.isInteger(n) || n < 10 || n > 100) return null;
+  return String(n);
+}
+
+function parseWeight(input) {
+  const n = Number(input.trim().replace(',', '.'));
+  if (!Number.isFinite(n) || n < 30 || n > 250) return null;
+  return String(n);
+}
+
+function parseHeight(input) {
+  const n = Number(input.trim().replace(',', '.'));
+  if (!Number.isFinite(n) || n < 100 || n > 230) return null;
+  return String(n);
+}
+
+function parseCheckinTime(input) {
+  const match = input.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  return `${match[1].padStart(2, '0')}:${match[2]}`;
+}
+
+const TEXT_STEPS = {
+  age: {
+    prompt: 'Сколько тебе лет? Восстановление и риск перегрузки сильно зависят от возраста.',
+    parse: parseAge,
+    errorMessage: 'Не понял. Напиши возраст числом, например 35',
+  },
+  weight: {
+    prompt: 'Твой вес в кг? Нужно для расчёта питания и нагрузки. Просто число, например 70',
+    parse: parseWeight,
+    errorMessage: 'Не понял. Напиши вес в кг числом, например 70',
+  },
+  height: {
+    prompt: 'Твой рост в см? Просто число, например 175',
+    parse: parseHeight,
+    errorMessage: 'Не понял. Напиши рост в см числом, например 175',
+  },
+  checkin_time: {
+    prompt: 'В какое время тебе удобно, чтобы я писал первым? Формат ЧЧ:ММ, например 08:00',
+    parse: parseCheckinTime,
+    errorMessage: 'Не понял формат. Напиши время как ЧЧ:ММ, например 08:00',
+  },
+};
+
 export function getNextStep(user) {
   return STEP_ORDER.find((field) => !user[field]) ?? null;
 }
 
 export function isButtonStep(field) {
   return field in QUESTIONS;
+}
+
+export function isTextStep(field) {
+  return field in TEXT_STEPS;
 }
 
 export function buildQuestion(field) {
@@ -45,10 +103,16 @@ export function buildQuestion(field) {
   };
 }
 
-export function parseCheckinTime(input) {
-  const match = input.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-  if (!match) return null;
-  return `${match[1].padStart(2, '0')}:${match[2]}`;
+export function getTextStepPrompt(field) {
+  return TEXT_STEPS[field].prompt;
+}
+
+export function getTextStepError(field) {
+  return TEXT_STEPS[field].errorMessage;
+}
+
+export function parseTextStep(field, input) {
+  return TEXT_STEPS[field].parse(input);
 }
 
 export function completionMessage() {
