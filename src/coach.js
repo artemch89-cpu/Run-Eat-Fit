@@ -4,6 +4,9 @@ import {
   upsertWeeklyPlan,
   getActiveOverrides,
   upsertOverride,
+  getOverrideForDate,
+  getTrainingLogForDate,
+  upsertTrainingLog,
   saveFitnessTestResults,
   markFitnessTestOffered,
 } from './db.js';
@@ -27,7 +30,7 @@ function formatNow() {
   return `${weekday}, ${date}, ${time}`;
 }
 
-function belgradeTodayISO() {
+export function belgradeTodayISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: BOT_TIMEZONE });
 }
 
@@ -114,6 +117,26 @@ function applyPlanToolCall(telegramId, input) {
 const PLAN_PAST_DAYS = 2;
 const PLAN_FUTURE_DAYS = 14; // включая сегодня
 
+// Единая точка резолва «что за тренировка в этот день»: исключение на дату
+// приоритетнее постоянной схемы. formatPlanSection/buildDayAnchor раньше
+// дублировали это выражение каждый по-своему — вынесено, чтобы не разъезжалось.
+function resolveWorkout(plan, overrideByDate, iso) {
+  const col = isoWeekdayColumn(iso);
+  return overrideByDate.get(iso) ?? plan?.[col] ?? 'тренировки нет';
+}
+
+// Резолв ЛЮБОЙ даты (не только окна −2..+14 из formatPlanSection) — нужен для
+// бэкдейтинга в training_log («в понедельник пропустил» может быть неделю
+// назад). Точечный lookup через getOverrideForDate, не getActiveOverrides
+// (та возвращает «от даты и дальше вперёд» — не то же самое для одной
+// произвольной, возможно далеко прошлой, даты).
+export function resolveDayWorkout(telegramId, iso) {
+  const plan = getWeeklyPlan(telegramId);
+  const workout = getOverrideForDate(telegramId, iso);
+  const overrideByDate = workout ? new Map([[iso, workout]]) : new Map();
+  return resolveWorkout(plan, overrideByDate, iso);
+}
+
 export function formatPlanSection(user) {
   const plan = getWeeklyPlan(user.telegram_id);
   const today = belgradeTodayISO();
@@ -134,7 +157,7 @@ export function formatPlanSection(user) {
     const col = isoWeekdayColumn(iso);
     const prefix = DAY_LABELS[i] ?? '';
     const changed = overrideByDate.has(iso);
-    const workout = changed ? overrideByDate.get(iso) : plan?.[col] || 'тренировки нет';
+    const workout = resolveWorkout(plan, overrideByDate, iso);
     rows.push(`- ${prefix}${WEEKDAY_LABELS[col]} ${ddmm(iso)}: ${workout}${changed ? '  [разовое изменение на этот день]' : ''}`);
   }
 
@@ -174,7 +197,7 @@ export function buildDayAnchor(user) {
   ].map(([label, i]) => {
     const iso = addDaysISO(today, i);
     const col = isoWeekdayColumn(iso);
-    const workout = overrideByDate.get(iso) ?? plan?.[col] ?? 'тренировки нет';
+    const workout = resolveWorkout(plan, overrideByDate, iso);
     return `${label} (${WEEKDAY_LABELS[col]} ${ddmm(iso)}) — ${workout}`;
   });
 
