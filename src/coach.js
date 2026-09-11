@@ -9,6 +9,9 @@ import {
   saveFitnessTestResults,
   addFitnessTestRecord,
   markFitnessTestOffered,
+  updateBodyMeasurementSnapshot,
+  addBodyMeasurementRecord,
+  markMeasurementOffered,
 } from './db.js';
 
 const anthropic = new Anthropic();
@@ -302,6 +305,52 @@ function formatFitnessTestSection(user) {
 Сейчас подходящий момент мягко предложить тест физической готовности (${offerCount === 0 ? 'первое предложение' : `повторное предложение, откладывали уже ${offerCount} раз`}). Впиши это органично в ответ, объясни коротко пользу — точнее план и понимание текущей формы. Без давления: если пользователь не готов или уходит от темы, просто продолжай разговор как обычно, не настаивай и не повторяй в этом же ответе.`;
 }
 
+const BODY_MEASUREMENTS_TOOL = {
+  name: 'log_body_measurements',
+  description:
+    'Сохрани результаты замера тела, которые сообщил пользователь — вес и/или объёмы. Указывай только то, что он реально назвал, не обязательно все поля сразу.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      weight: { type: 'string', description: 'Вес, например "78 кг"' },
+      waist: { type: 'string', description: 'Объём талии, например "82 см"' },
+      chest: { type: 'string', description: 'Объём груди (опционально)' },
+      hips: { type: 'string', description: 'Объём бёдер (опционально)' },
+    },
+  },
+};
+
+function applyBodyMeasurementsToolCall(telegramId, input) {
+  const iso = belgradeTodayISO();
+  addBodyMeasurementRecord(telegramId, iso, input); // история всех замеров
+  updateBodyMeasurementSnapshot(telegramId, input); // снимок последнего — это же обновляет users.weight
+}
+
+// Не гасится навсегда после первого замера (в отличие от теста готовности
+// выше) — замеры повторяются регулярно, это и есть смысл фичи. Интервал не
+// убывающий ramp (тест готовности рассчитан «предложить раз и отстать»), а
+// держится около недели: первое предложение сразу доступно, дальше — каждые
+// 7 дней от последнего (Math.min естественно держит хвост на 7).
+const MEASUREMENT_SCHEDULE_DAYS = [0, 7];
+
+function formatMeasurementsSection(user) {
+  const todayISO = belgradeTodayISO();
+  const offerCount = user.measurement_offer_count || 0;
+  const requiredGap = MEASUREMENT_SCHEDULE_DAYS[Math.min(offerCount, MEASUREMENT_SCHEDULE_DAYS.length - 1)];
+
+  const shouldOffer = !user.measurement_last_offered_at || daysBetweenISO(user.measurement_last_offered_at, todayISO) >= requiredGap;
+  if (!shouldOffer) return '';
+
+  markMeasurementOffered(user.telegram_id, todayISO);
+
+  // Про грудь/бёдра — только в самом первом предложении за всё время: дальше
+  // не упоминаем, чтобы не наседать на тех, кому это не интересно (сам юзер
+  // может прислать их в любой момент — tool это всё равно примет).
+  return `
+
+Сейчас подходящий момент мягко напомнить про замеры тела — в конце ответа, не отдельным вопросом (как с чек-ином — не разбивай реплику на два смысловых куска). Вес и талия по утрам натощак.${offerCount === 0 ? ' Можешь также упомянуть, что при желании — ещё и грудь/бёдра.' : ''} Без нажима: если сегодня не удобно, просто продолжай разговор как обычно.`;
+}
+
 // Замороженная часть промпта: одинакова для всех пользователей и не меняется
 // между запросами. Идёт первой — потом на неё можно будет повесить кэш.
 const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер в Telegram-боте Run Eat Fit. Живой коуч с памятью о жизни пользователя, не калькулятор калорий: держишь контекст (усталость, перелёт, настроение) и подстраиваешь план под него.
@@ -339,6 +388,10 @@ const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер �
 Журнал фактов (отдельно от плана — план это намерение, журнал это что реально было):
 - Пользователь рассказывает, что сделал или не сделал (сбегал, пропустил, сделал частично, отдохнул как планировалось) — вызови log_training_day. Это не то же самое, что update_plan: факт о прошлом, а не изменение будущей схемы.
 - Не путай с изменением плана («давай завтра лучше бег вместо силовой» — это update_plan) и с предположениями о будущем («наверное сегодня не успею» — это вообще не факт, ничего не вызывай, пока не станет известно точно).
+
+Замеры тела (не путай с тестом физической готовности и не с журналом тренировок):
+- Пользователь сообщает вес и/или объёмы (талия/грудь/бёдра) — вызови log_body_measurements. Это отдельный tool от save_fitness_test_results (тот про отжимания/планку/пульс/бег) и от log_training_day (тот про факт тренировки).
+- Не обязательно все поля сразу — что назвал, то и сохраняй.
 
 Ежедневный чек-ин:
 - Сообщение с текстом ровно ${CHECKIN_TRIGGER} — это не реплика пользователя, а системный сигнал: настало выбранное им время, и сейчас пишешь первым ты. Не упоминай этот текст и не реагируй на него как на вопрос — вместо этого сам инициируй короткое сообщение с минимальным порогом входа (например «одним словом — как ты сегодня?», «как спалось, как тело после вчерашнего?»), без «отчитайся о тренировке».
@@ -378,6 +431,7 @@ export function buildSystemPrompt(user) {
 - Профиль нагрузки: ${user.activity}
 - Стиль общения: ${TONE_DESCRIPTIONS[user.tone] ?? user.tone}
 ${formatFitnessTestSection(user)}
+${formatMeasurementsSection(user)}
 
 ${formatPlanSection(user)}`;
 
@@ -467,7 +521,7 @@ function requestCoach(user, messages, maxTokens) {
     model: COACH_MODEL,
     max_tokens: maxTokens,
     system: buildSystemPrompt(user),
-    tools: [PLAN_TOOL, FITNESS_TEST_TOOL, TRAINING_LOG_TOOL],
+    tools: [PLAN_TOOL, FITNESS_TEST_TOOL, TRAINING_LOG_TOOL, BODY_MEASUREMENTS_TOOL],
     messages: appendDayAnchor(user, messages),
   });
 }
@@ -482,6 +536,7 @@ const TOOL_FALLBACK_REPLY = {
   update_plan: 'Обновил план.',
   save_fitness_test_results: 'Записал результаты теста.',
   log_training_day: 'Записал.',
+  log_body_measurements: 'Записал замеры.',
 };
 
 function extractReply(user, response) {
@@ -498,6 +553,10 @@ function extractReply(user, response) {
     if (block.type === 'tool_use' && block.name === 'log_training_day') {
       applyTrainingLogToolCall(user.telegram_id, block.input);
       fallbackReply = TOOL_FALLBACK_REPLY.log_training_day;
+    }
+    if (block.type === 'tool_use' && block.name === 'log_body_measurements') {
+      applyBodyMeasurementsToolCall(user.telegram_id, block.input);
+      fallbackReply = TOOL_FALLBACK_REPLY.log_body_measurements;
     }
   }
 
