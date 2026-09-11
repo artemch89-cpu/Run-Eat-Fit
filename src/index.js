@@ -12,7 +12,7 @@ import {
   markDayCloseSent,
 } from './db.js';
 import { getNextStep, buildQuestion, isTextStep, getTextStepPrompt, getTextStepError, parseTextStep, completionMessage } from './onboarding.js';
-import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, BOT_TIMEZONE } from './coach.js';
+import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, getCoachPhotoReply, BOT_TIMEZONE } from './coach.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -139,6 +139,34 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.error('Coach reply error:', err);
     ctx.reply('Не получилось ответить — сбой на моей стороне. Попробуй ещё раз чуть позже.');
+  }
+});
+
+// Только сжатые фото (ctx.message.photo) — не document-файлы. Берём
+// предпоследний размер массива (Telegram отдаёт от меньшего к большему) —
+// «стандартное» разрешение, не миниатюра и не полноразмерный оригинал.
+bot.on('photo', async (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (!user || getNextStep(user)) return; // анкета не завершена — фото пока не обрабатываем
+
+  const sizes = ctx.message.photo;
+  if (!sizes?.length) return;
+  const chosen = sizes.length >= 2 ? sizes[sizes.length - 2] : sizes[0];
+  const caption = ctx.message.caption || '';
+
+  addMessage(ctx.from.id, 'user', caption ? `[Фото еды] ${caption}` : '[Фото еды]');
+  const history = getHistory(ctx.from.id);
+
+  try {
+    const fileUrl = await ctx.telegram.getFileLink(chosen.file_id);
+    const res = await fetch(fileUrl.href);
+    const data = Buffer.from(await res.arrayBuffer()).toString('base64');
+    const reply = await getCoachPhotoReply(user, history, { data, mediaType: 'image/jpeg' }, caption);
+    addMessage(ctx.from.id, 'assistant', reply);
+    await sendCoachReply(ctx.telegram, ctx.chat.id, reply);
+  } catch (err) {
+    console.error('Photo coach reply error:', err);
+    ctx.reply('Не получилось разобрать фото — сбой на моей стороне. Попробуй ещё раз чуть позже.');
   }
 });
 
