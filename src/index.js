@@ -1,10 +1,24 @@
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
-import { createUser, getUser, updateUser, addMessage, getHistory, getUsersDueForCheckin, markCheckinSent } from './db.js';
+import {
+  createUser,
+  getUser,
+  updateUser,
+  addMessage,
+  getHistory,
+  getUsersDueForCheckin,
+  markCheckinSent,
+  getUsersDueForDayClose,
+  markDayCloseSent,
+} from './db.js';
 import { getNextStep, buildQuestion, isTextStep, getTextStepPrompt, getTextStepError, parseTextStep, completionMessage } from './onboarding.js';
-import { getCoachReply, getCheckinTrigger, BOT_TIMEZONE } from './coach.js';
+import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, BOT_TIMEZONE } from './coach.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
+// Фиксированное время для всех на старте (не поле анкеты — не усложняем
+// онбординг). Если понадобится гибче — привязать к checkin_time юзера.
+const DAY_CLOSE_TIME = '21:00';
 
 async function sendFormatted(telegram, chatId, text) {
   try {
@@ -52,6 +66,27 @@ async function checkinTick() {
       await sendCoachReply(bot.telegram, user.telegram_id, reply);
     } catch (err) {
       console.error('Checkin trigger failed for', user.telegram_id, err);
+    }
+  }
+}
+
+// Пассивной ловли log_training_day в обычном разговоре недостаточно — если
+// юзер за день ни разу не написал, день молча остаётся без записи. Второй,
+// активный тик: раз в день в фиксированное время догоняет тех, у кого
+// training_log за сегодня ещё пуст (getUsersDueForDayClose это уже фильтрует).
+async function dayCloseTick() {
+  const { hhmm, today } = belgradeNowParts();
+  if (hhmm !== DAY_CLOSE_TIME) return;
+  const dueUsers = getUsersDueForDayClose(today);
+  for (const user of dueUsers) {
+    try {
+      const history = getHistory(user.telegram_id);
+      const reply = await getDayCloseTrigger(user, history);
+      addMessage(user.telegram_id, 'assistant', reply);
+      markDayCloseSent(user.telegram_id, today);
+      await sendCoachReply(bot.telegram, user.telegram_id, reply);
+    } catch (err) {
+      console.error('Day-close trigger failed for', user.telegram_id, err);
     }
   }
 }
@@ -111,6 +146,7 @@ bot.launch();
 console.log('Run Eat Fit bot started');
 
 setInterval(checkinTick, 60 * 1000);
+setInterval(dayCloseTick, 60 * 1000);
 
 function shutdown(signal) {
   bot.stop(signal);
