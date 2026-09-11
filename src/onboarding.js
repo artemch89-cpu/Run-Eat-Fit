@@ -40,25 +40,28 @@ const QUESTIONS = {
   },
 };
 
-function parseAge(input) {
+// Экспортированы дополнительно к использованию в TEXT_STEPS — нужны в
+// coach.js для валидации значений, которые прислал разговорный tool
+// update_profile (те же правила, что и в анкете).
+export function parseAge(input) {
   const n = Number(input.trim());
   if (!Number.isInteger(n) || n < 10 || n > 100) return null;
   return String(n);
 }
 
-function parseWeight(input) {
+export function parseWeight(input) {
   const n = Number(input.trim().replace(',', '.'));
   if (!Number.isFinite(n) || n < 30 || n > 250) return null;
   return String(n);
 }
 
-function parseHeight(input) {
+export function parseHeight(input) {
   const n = Number(input.trim().replace(',', '.'));
   if (!Number.isFinite(n) || n < 100 || n > 230) return null;
   return String(n);
 }
 
-function parseCheckinTime(input) {
+export function parseCheckinTime(input) {
   const match = input.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
   if (!match) return null;
   return `${match[1].padStart(2, '0')}:${match[2]}`;
@@ -90,6 +93,15 @@ const TEXT_STEPS = {
 export function getNextStep(user) {
   if (!user.goal || user.goal === GOAL_OTHER_PENDING) return 'goal';
   return STEP_ORDER.slice(1).find((field) => !user[field]) ?? null;
+}
+
+// Анкета целиком закрыта — не то же самое, что getNextStep(user) === null:
+// goal может быть в процессе уточнения «другое» (GOAL_OTHER_PENDING) у уже
+// полностью заполненного профиля, если юзер как раз меняет цель через
+// /profile. Нужно, чтобы отличить «первичная анкета» от «точечная правка
+// поля» и не показывать в конце правки сообщение про анкету.
+export function isProfileComplete(user) {
+  return STEP_ORDER.slice(1).every((field) => user[field]);
 }
 
 export function isButtonStep(field) {
@@ -132,4 +144,28 @@ export function parseTextStep(field, input) {
 
 export function completionMessage() {
   return 'Готово! Настройки сохранены. Буду писать тебе каждый день в выбранное время — начинаем.';
+}
+
+export const PROFILE_FIELD_LABELS = {
+  goal: 'Цель',
+  age: 'Возраст',
+  gender: 'Пол',
+  weight: 'Вес',
+  height: 'Рост',
+  activity: 'Профиль нагрузки',
+  tone: 'Стиль общения',
+  checkin_time: 'Время чек-ина',
+};
+
+function labelForValue(field, value) {
+  const found = QUESTIONS[field]?.options.find(([, v]) => v === value);
+  return found ? found[0] : value;
+}
+
+// Для /profile — короткая человекочитаемая сводка всех 8 полей анкеты.
+export function describeProfile(user) {
+  return STEP_ORDER.map((field) => {
+    const value = isButtonStep(field) ? labelForValue(field, user[field]) : user[field];
+    return `${PROFILE_FIELD_LABELS[field]}: ${value}`;
+  }).join('\n');
 }
