@@ -11,7 +11,18 @@ import {
   getUsersDueForDayClose,
   markDayCloseSent,
 } from './db.js';
-import { getNextStep, buildQuestion, isTextStep, getTextStepPrompt, getTextStepError, parseTextStep, completionMessage } from './onboarding.js';
+import {
+  getNextStep,
+  buildQuestion,
+  isTextStep,
+  getTextStepPrompt,
+  getTextStepError,
+  parseTextStep,
+  completionMessage,
+  GOAL_OTHER_PENDING,
+  isAwaitingGoalDetail,
+  goalDetailPrompt,
+} from './onboarding.js';
 import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, getCoachPhotoReply, BOT_TIMEZONE } from './coach.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -111,14 +122,28 @@ bot.start((ctx) => {
 
 bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   const [, field, value] = ctx.match;
-  updateUser(ctx.from.id, field, value);
   await ctx.answerCbQuery();
+
+  if (field === 'goal' && value === 'другое') {
+    updateUser(ctx.from.id, 'goal', GOAL_OTHER_PENDING);
+    return ctx.reply(goalDetailPrompt());
+  }
+
+  updateUser(ctx.from.id, field, value);
   await askNextStep(ctx, ctx.from.id);
 });
 
 bot.on('text', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user) return;
+
+  if (isAwaitingGoalDetail(user)) {
+    const value = ctx.message.text.trim();
+    if (!value) return ctx.reply(goalDetailPrompt());
+    updateUser(ctx.from.id, 'goal', value);
+    return askNextStep(ctx, ctx.from.id);
+  }
+
   const step = getNextStep(user);
   if (isTextStep(step)) {
     const value = parseTextStep(step, ctx.message.text);

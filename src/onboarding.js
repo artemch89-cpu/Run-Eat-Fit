@@ -1,5 +1,11 @@
 const STEP_ORDER = ['goal', 'age', 'gender', 'weight', 'height', 'activity', 'tone', 'checkin_time'];
 
+// Служебное значение goal, пока не пришло уточнение после кнопки «Другое» —
+// технический маркер, не показывается пользователю и никогда не попадает в
+// коуч-промпт (getNextStep держит шаг goal «неотвеченным», пока он не заменён
+// на реальный текст).
+export const GOAL_OTHER_PENDING = '__goal_other_pending__';
+
 const QUESTIONS = {
   goal: {
     text: 'Привет! Я твой персональный тренер. Начнём с цели — какая она у тебя?',
@@ -82,11 +88,20 @@ const TEXT_STEPS = {
 };
 
 export function getNextStep(user) {
-  return STEP_ORDER.find((field) => !user[field]) ?? null;
+  if (!user.goal || user.goal === GOAL_OTHER_PENDING) return 'goal';
+  return STEP_ORDER.slice(1).find((field) => !user[field]) ?? null;
 }
 
 export function isButtonStep(field) {
   return field in QUESTIONS;
+}
+
+export function isAwaitingGoalDetail(user) {
+  return user.goal === GOAL_OTHER_PENDING;
+}
+
+export function goalDetailPrompt() {
+  return 'Расскажи своими словами, какая у тебя цель.';
 }
 
 export function isTextStep(field) {
