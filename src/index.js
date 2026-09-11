@@ -10,11 +10,14 @@ import {
   markCheckinSent,
   getUsersDueForDayClose,
   markDayCloseSent,
+  setPendingEditField,
+  clearPendingEditField,
 } from './db.js';
 import {
   getNextStep,
   buildQuestion,
   isTextStep,
+  isButtonStep,
   getTextStepPrompt,
   getTextStepError,
   parseTextStep,
@@ -22,6 +25,10 @@ import {
   GOAL_OTHER_PENDING,
   isAwaitingGoalDetail,
   goalDetailPrompt,
+  isProfileComplete,
+  describeProfile,
+  describeFieldValue,
+  PROFILE_FIELD_LABELS,
 } from './onboarding.js';
 import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, getCoachPhotoReply, BOT_TIMEZONE } from './coach.js';
 
@@ -120,9 +127,34 @@ bot.start((ctx) => {
   askNextStep(ctx, ctx.from.id);
 });
 
+const MEASUREMENT_LABELS = { waist: 'Талия', chest: 'Грудь', hips: 'Бёдра' };
+
+bot.command('profile', (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (!user || !isProfileComplete(user)) {
+    return ctx.reply('Сначала закончи анкету — напиши /start.');
+  }
+
+  const extras = ['waist', 'chest', 'hips']
+    .filter((f) => user[f])
+    .map((f) => `${MEASUREMENT_LABELS[f]}: ${user[f]}`);
+  const extrasBlock = extras.length ? `\n\nПоследние замеры:\n${extras.join('\n')}` : '';
+
+  const keyboard = {
+    inline_keyboard: Object.entries(PROFILE_FIELD_LABELS).map(([field, label]) => [
+      { text: `Изменить: ${label}`, callback_data: `profile_edit:${field}` },
+    ]),
+  };
+
+  ctx.reply(`${describeProfile(user)}${extrasBlock}`, { reply_markup: keyboard });
+});
+
 bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   const [, field, value] = ctx.match;
   await ctx.answerCbQuery();
+
+  const user = getUser(ctx.from.id);
+  const isEdit = isProfileComplete(user); // /profile правит уже полный профиль, а не анкету
 
   if (field === 'goal' && value === 'другое') {
     updateUser(ctx.from.id, 'goal', GOAL_OTHER_PENDING);
@@ -130,17 +162,47 @@ bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   }
 
   updateUser(ctx.from.id, field, value);
+  if (isEdit) {
+    return ctx.reply(`Обновил: ${PROFILE_FIELD_LABELS[field]} → ${describeFieldValue(field, value)}`);
+  }
   await askNextStep(ctx, ctx.from.id);
+});
+
+// /profile жмёт «Изменить: <поле>» → для кнопочных полей просто повторно
+// показывает тот же вопрос анкеты (дальше отрабатывает хендлер выше), для
+// текстовых — нет готового callback-флоу, запоминаем ожидание в БД.
+bot.action(/^profile_edit:(.+)$/, async (ctx) => {
+  const field = ctx.match[1];
+  await ctx.answerCbQuery();
+  if (isButtonStep(field)) {
+    const { text, keyboard } = buildQuestion(field);
+    return ctx.reply(text, { reply_markup: keyboard });
+  }
+  setPendingEditField(ctx.from.id, field);
+  return ctx.reply(getTextStepPrompt(field));
 });
 
 bot.on('text', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user) return;
 
+  if (user.pending_edit_field) {
+    const field = user.pending_edit_field;
+    const value = parseTextStep(field, ctx.message.text);
+    if (!value) return ctx.reply(getTextStepError(field));
+    updateUser(ctx.from.id, field, value);
+    clearPendingEditField(ctx.from.id);
+    return ctx.reply(`Обновил: ${PROFILE_FIELD_LABELS[field]} → ${value}`);
+  }
+
   if (isAwaitingGoalDetail(user)) {
     const value = ctx.message.text.trim();
     if (!value) return ctx.reply(goalDetailPrompt());
+    const isEdit = isProfileComplete(user); // остальные 7 полей уже заполнены — это /profile, не анкета
     updateUser(ctx.from.id, 'goal', value);
+    if (isEdit) {
+      return ctx.reply(`Обновил: ${PROFILE_FIELD_LABELS.goal} → ${value}`);
+    }
     return askNextStep(ctx, ctx.from.id);
   }
 

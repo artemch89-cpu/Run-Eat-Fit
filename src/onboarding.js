@@ -169,3 +169,9 @@ export function describeProfile(user) {
     return `${PROFILE_FIELD_LABELS[field]}: ${value}`;
   }).join('\n');
 }
+
+// Для подтверждения после точечной правки одного поля — та же логика
+// «кнопочное значение → человекочитаемый лейбл», что в describeProfile.
+export function describeFieldValue(field, value) {
+  return isButtonStep(field) ? labelForValue(field, value) : value;
+}
