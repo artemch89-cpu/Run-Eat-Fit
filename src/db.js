@@ -69,6 +69,12 @@ try {
   // колонка уже есть
 }
 
+try {
+  db.exec('ALTER TABLE users ADD COLUMN pending_edit_field TEXT');
+} catch {
+  // колонка уже есть
+}
+
 const WEEKDAY_COLUMNS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 db.exec(`
@@ -160,6 +166,18 @@ export function updateUser(telegramId, field, value) {
   }
   db.prepare(`UPDATE users SET ${field} = ? WHERE telegram_id = ?`).run(value, telegramId);
   return getUser(telegramId);
+}
+
+// Точечная правка одного текстового поля профиля вне анкеты (/profile) — эти
+// поля не имеют кнопок, нужно «запомнить», какое поле ждёт следующий текст
+// от юзера. Кнопочные поля (goal/gender/activity/tone) этот механизм не
+// используют — у них есть готовый callback-флоу.
+export function setPendingEditField(telegramId, field) {
+  db.prepare('UPDATE users SET pending_edit_field = ? WHERE telegram_id = ?').run(field, telegramId);
+}
+
+export function clearPendingEditField(telegramId) {
+  db.prepare('UPDATE users SET pending_edit_field = NULL WHERE telegram_id = ?').run(telegramId);
 }
 
 export function addMessage(telegramId, role, content) {
