@@ -71,6 +71,24 @@ db.exec(`
   )
 `);
 
+// Журнал ФАКТОВ (что реально было с тренировкой в этот день), отдельно от
+// weekly_plan/plan_overrides (что должно быть — намерение, перезаписывается).
+// Одна строка на (юзер, дата), как plan_overrides.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS training_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    planned TEXT,
+    status TEXT,
+    actual TEXT,
+    note TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(telegram_id, date)
+  )
+`);
+
 export function getUser(telegramId) {
   return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
 }
@@ -142,6 +160,31 @@ export function upsertOverride(telegramId, date, workout) {
     `INSERT INTO plan_overrides (telegram_id, date, workout) VALUES (?, ?, ?)
      ON CONFLICT(telegram_id, date) DO UPDATE SET workout = excluded.workout`,
   ).run(telegramId, date, workout);
+}
+
+export function getOverrideForDate(telegramId, date) {
+  return db.prepare('SELECT workout FROM plan_overrides WHERE telegram_id = ? AND date = ?').get(telegramId, date)
+    ?.workout;
+}
+
+export function getTrainingLogForDate(telegramId, date) {
+  return db.prepare('SELECT * FROM training_log WHERE telegram_id = ? AND date = ?').get(telegramId, date);
+}
+
+// planned перезаписывается всегда свежим (это снимок того, что было
+// запланировано на момент отчёта, не пользовательский ввод — код резолвит
+// заново при каждом вызове). status/actual/note — последний непустой ответ
+// выигрывает по каждому полю отдельно, не склейка истории дня.
+export function upsertTrainingLog(telegramId, date, { planned, status, actual, note }) {
+  db.prepare(
+    `INSERT INTO training_log (telegram_id, date, planned, status, actual, note) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(telegram_id, date) DO UPDATE SET
+       planned = excluded.planned,
+       status = COALESCE(excluded.status, training_log.status),
+       actual = COALESCE(excluded.actual, training_log.actual),
+       note = COALESCE(excluded.note, training_log.note),
+       updated_at = CURRENT_TIMESTAMP`,
+  ).run(telegramId, date, planned ?? null, status ?? null, actual ?? null, note ?? null);
 }
 
 export function saveFitnessTestResults(telegramId, results) {
