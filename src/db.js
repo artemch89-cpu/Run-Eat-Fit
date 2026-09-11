@@ -29,6 +29,12 @@ try {
   // колонка уже есть — ALTER TABLE ADD COLUMN IF NOT EXISTS в SQLite не поддерживается
 }
 
+try {
+  db.exec('ALTER TABLE users ADD COLUMN last_day_close_date TEXT');
+} catch {
+  // колонка уже есть
+}
+
 for (const column of ['age', 'gender', 'weight', 'height']) {
   try {
     db.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
@@ -132,6 +138,24 @@ export function getUsersDueForCheckin(hhmm, today) {
 
 export function markCheckinSent(telegramId, today) {
   db.prepare('UPDATE users SET last_checkin_date = ? WHERE telegram_id = ?').run(today, telegramId);
+}
+
+// Время закрытия дня — фиксированная константа в index.js, не колонка юзера
+// (не усложняем анкету), поэтому в отличие от getUsersDueForCheckin здесь нет
+// сравнения с hhmm — вызывающий код сам решает, что сейчас подходящий момент.
+export function getUsersDueForDayClose(today) {
+  return db
+    .prepare(
+      `SELECT * FROM users
+       WHERE goal IS NOT NULL AND activity IS NOT NULL AND tone IS NOT NULL
+         AND (last_day_close_date IS NULL OR last_day_close_date != ?)
+         AND NOT EXISTS (SELECT 1 FROM training_log t WHERE t.telegram_id = users.telegram_id AND t.date = ?)`,
+    )
+    .all(today, today);
+}
+
+export function markDayCloseSent(telegramId, today) {
+  db.prepare('UPDATE users SET last_day_close_date = ? WHERE telegram_id = ?').run(today, telegramId);
 }
 
 export function getWeeklyPlan(telegramId) {
