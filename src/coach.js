@@ -12,7 +12,9 @@ import {
   updateBodyMeasurementSnapshot,
   addBodyMeasurementRecord,
   markMeasurementOffered,
+  updateUser,
 } from './db.js';
+import { parseAge, parseWeight, parseHeight, parseCheckinTime } from './onboarding.js';
 
 const anthropic = new Anthropic();
 
@@ -351,6 +353,42 @@ function formatMeasurementsSection(user) {
 Сейчас подходящий момент мягко напомнить про замеры тела — в конце ответа, не отдельным вопросом (как с чек-ином — не разбивай реплику на два смысловых куска). Вес и талия по утрам натощак.${offerCount === 0 ? ' Можешь также упомянуть, что при желании — ещё и грудь/бёдра.' : ''} Без нажима: если сегодня не удобно, просто продолжай разговор как обычно.`;
 }
 
+const UPDATE_PROFILE_TOOL = {
+  name: 'update_profile',
+  description:
+    'Обнови анкетные данные пользователя, когда он явно сообщает, что что-то изменилось или было указано неверно (цель, возраст, пол, вес, рост, профиль нагрузки, стиль общения, время чек-ина). Не для регулярных замеров (для этого log_body_measurements) и не для фактов о тренировке (для этого log_training_day). Указывай только то поле, которое он реально назвал.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      goal: { type: 'string' },
+      age: { type: 'string', description: 'Числом, например "32"' },
+      gender: { type: 'string', enum: ['мужской', 'женский'] },
+      weight: { type: 'string', description: 'В кг, например "78"' },
+      height: { type: 'string', description: 'В см, например "180"' },
+      activity: { type: 'string', enum: ['выносливость', 'силовая'] },
+      tone: { type: 'string', enum: ['строгий', 'партнёр', 'мягкий'] },
+      checkin_time: { type: 'string', description: 'Формат ЧЧ:ММ, например "09:00"' },
+    },
+  },
+};
+
+const PROFILE_FIELDS = ['goal', 'age', 'gender', 'weight', 'height', 'activity', 'tone', 'checkin_time'];
+const PROFILE_FIELD_PARSERS = { age: parseAge, weight: parseWeight, height: parseHeight, checkin_time: parseCheckinTime };
+
+// Те же правила валидации, что в анкете (onboarding.js) — невалидное
+// значение просто тихо пропускается, без ошибки пользователю (как и у
+// остальных tool'ов в проекте — лучший эффорт, не строгая форма).
+function applyUpdateProfileToolCall(telegramId, input) {
+  for (const field of PROFILE_FIELDS) {
+    const rawValue = input[field];
+    if (!rawValue) continue;
+    const parser = PROFILE_FIELD_PARSERS[field];
+    const value = parser ? parser(rawValue) : rawValue;
+    if (value == null) continue;
+    updateUser(telegramId, field, value);
+  }
+}
+
 // Замороженная часть промпта: одинакова для всех пользователей и не меняется
 // между запросами. Идёт первой — потом на неё можно будет повесить кэш.
 const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер в Telegram-боте Run Eat Fit. Живой коуч с памятью о жизни пользователя, не калькулятор калорий: держишь контекст (усталость, перелёт, настроение) и подстраиваешь план под него.
@@ -392,6 +430,10 @@ const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер �
 Замеры тела (не путай с тестом физической готовности и не с журналом тренировок):
 - Пользователь сообщает вес и/или объёмы (талия/грудь/бёдра) — вызови log_body_measurements. Это отдельный tool от save_fitness_test_results (тот про отжимания/планку/пульс/бег) и от log_training_day (тот про факт тренировки).
 - Не обязательно все поля сразу — что назвал, то и сохраняй.
+
+Профиль (анкетные данные — цель/возраст/пол/вес/рост/профиль нагрузки/стиль общения/время чек-ина):
+- Пользователь явно сообщает, что что-то из этого изменилось или было неверно указано («вообще-то мне 32, а не 30», «поменяй время чек-ина на 9 утра», «хочу более мягкий тон») — вызови update_profile с тем полем, которое он назвал.
+- Это НЕ вес/объёмы для регулярных замеров (для этого log_body_measurements) и не факт тренировки (для этого log_training_day) — а именно исправление/обновление базовых данных о человеке.
 
 Ежедневный чек-ин:
 - Сообщение с текстом ровно ${CHECKIN_TRIGGER} — это не реплика пользователя, а системный сигнал: настало выбранное им время, и сейчас пишешь первым ты. Не упоминай этот текст и не реагируй на него как на вопрос — вместо этого сам инициируй короткое сообщение с минимальным порогом входа (например «одним словом — как ты сегодня?», «как спалось, как тело после вчерашнего?»), без «отчитайся о тренировке».
@@ -521,7 +563,7 @@ function requestCoach(user, messages, maxTokens) {
     model: COACH_MODEL,
     max_tokens: maxTokens,
     system: buildSystemPrompt(user),
-    tools: [PLAN_TOOL, FITNESS_TEST_TOOL, TRAINING_LOG_TOOL, BODY_MEASUREMENTS_TOOL],
+    tools: [PLAN_TOOL, FITNESS_TEST_TOOL, TRAINING_LOG_TOOL, BODY_MEASUREMENTS_TOOL, UPDATE_PROFILE_TOOL],
     messages: appendDayAnchor(user, messages),
   });
 }
@@ -537,6 +579,7 @@ const TOOL_FALLBACK_REPLY = {
   save_fitness_test_results: 'Записал результаты теста.',
   log_training_day: 'Записал.',
   log_body_measurements: 'Записал замеры.',
+  update_profile: 'Обновил профиль.',
 };
 
 function extractReply(user, response) {
@@ -557,6 +600,10 @@ function extractReply(user, response) {
     if (block.type === 'tool_use' && block.name === 'log_body_measurements') {
       applyBodyMeasurementsToolCall(user.telegram_id, block.input);
       fallbackReply = TOOL_FALLBACK_REPLY.log_body_measurements;
+    }
+    if (block.type === 'tool_use' && block.name === 'update_profile') {
+      applyUpdateProfileToolCall(user.telegram_id, block.input);
+      fallbackReply = TOOL_FALLBACK_REPLY.update_profile;
     }
   }
 
