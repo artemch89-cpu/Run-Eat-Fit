@@ -56,6 +56,19 @@ try {
   // колонка уже есть
 }
 
+for (const column of ['waist', 'chest', 'hips', 'measurement_last_offered_at']) {
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+  } catch {
+    // колонка уже есть
+  }
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN measurement_offer_count INTEGER DEFAULT 0');
+} catch {
+  // колонка уже есть
+}
+
 const WEEKDAY_COLUMNS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 db.exec(`
@@ -109,6 +122,23 @@ db.exec(`
     plank TEXT,
     resting_hr TEXT,
     run TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// users.weight/waist/chest/hips — снимок последнего замера (перезаписывается,
+// нужен для /profile и системного промпта). Эта таблица — история ВСЕХ
+// замеров, append-only (без UNIQUE — повторный замер в тот же день допустим),
+// чтобы потом можно было строить график изменения тела во времени.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS body_measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    weight TEXT,
+    waist TEXT,
+    chest TEXT,
+    hips TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )
 `);
@@ -250,6 +280,30 @@ export function addFitnessTestRecord(telegramId, date, results) {
 export function markFitnessTestOffered(telegramId, todayISO) {
   db.prepare(
     'UPDATE users SET fitness_test_last_offered_at = ?, fitness_test_offer_count = COALESCE(fitness_test_offer_count, 0) + 1 WHERE telegram_id = ?',
+  ).run(todayISO, telegramId);
+}
+
+export function updateBodyMeasurementSnapshot(telegramId, results) {
+  const fields = ['weight', 'waist', 'chest', 'hips'].filter((f) => results[f]);
+  if (fields.length === 0) return;
+  const setClause = fields.map((f) => `${f} = ?`).join(', ');
+  db.prepare(`UPDATE users SET ${setClause} WHERE telegram_id = ?`).run(
+    ...fields.map((f) => results[f]),
+    telegramId,
+  );
+}
+
+export function addBodyMeasurementRecord(telegramId, date, results) {
+  const fields = ['weight', 'waist', 'chest', 'hips'];
+  if (!fields.some((f) => results[f])) return;
+  db.prepare(
+    'INSERT INTO body_measurements (telegram_id, date, weight, waist, chest, hips) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(telegramId, date, results.weight ?? null, results.waist ?? null, results.chest ?? null, results.hips ?? null);
+}
+
+export function markMeasurementOffered(telegramId, todayISO) {
+  db.prepare(
+    'UPDATE users SET measurement_last_offered_at = ?, measurement_offer_count = COALESCE(measurement_offer_count, 0) + 1 WHERE telegram_id = ?',
   ).run(todayISO, telegramId);
 }
 
