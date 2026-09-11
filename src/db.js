@@ -95,6 +95,24 @@ db.exec(`
   )
 `);
 
+// users.fitness_test_* — снимок последнего теста (перезаписывается, нужен
+// для formatFitnessTestSection). Эта таблица — история ВСЕХ тестов, append-
+// only (без UNIQUE — повторный тест в тот же день допустим), чтобы потом
+// можно было видеть прогресс физической готовности во времени, а не только
+// последний результат.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS fitness_tests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    pushups TEXT,
+    plank TEXT,
+    resting_hr TEXT,
+    run TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 export function getUser(telegramId) {
   return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
 }
@@ -219,6 +237,14 @@ export function saveFitnessTestResults(telegramId, results) {
     ...fields.map((f) => results[f]),
     telegramId,
   );
+}
+
+export function addFitnessTestRecord(telegramId, date, results) {
+  const fields = ['pushups', 'plank', 'resting_hr', 'run'];
+  if (!fields.some((f) => results[f])) return;
+  db.prepare(
+    'INSERT INTO fitness_tests (telegram_id, date, pushups, plank, resting_hr, run) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(telegramId, date, results.pushups ?? null, results.plank ?? null, results.resting_hr ?? null, results.run ?? null);
 }
 
 export function markFitnessTestOffered(telegramId, todayISO) {

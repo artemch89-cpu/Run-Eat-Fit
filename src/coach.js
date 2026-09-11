@@ -5,9 +5,9 @@ import {
   getActiveOverrides,
   upsertOverride,
   getOverrideForDate,
-  getTrainingLogForDate,
   upsertTrainingLog,
   saveFitnessTestResults,
+  addFitnessTestRecord,
   markFitnessTestOffered,
 } from './db.js';
 
@@ -269,7 +269,8 @@ const FITNESS_TEST_TOOL = {
 };
 
 function applyFitnessTestToolCall(telegramId, input) {
-  saveFitnessTestResults(telegramId, input);
+  saveFitnessTestResults(telegramId, input); // снимок последнего теста (как было)
+  addFitnessTestRecord(telegramId, belgradeTodayISO(), input); // + история всех тестов
 }
 
 // Расписание в днях между предложениями теста: первое сразу, потом 2, 5, 10,
