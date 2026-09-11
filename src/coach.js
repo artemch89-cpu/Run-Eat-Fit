@@ -105,12 +105,20 @@ function applyPlanToolCall(telegramId, input) {
 // исключения уже наложены на постоянную схему. Модель ничего не вычисляет и не
 // сопоставляет — просто читает строку нужного дня. Это убирает класс ошибок
 // «взял тренировку не того дня» (модель тянулась к тому, что обсуждали недавно).
-const PLAN_WINDOW_DAYS = 14;
+//
+// Окно смотрит и назад (PAST), и вперёд (FUTURE): первая версия смотрела только
+// вперёд, и на вопрос «что было вчера» модель не находила исключение на вчера
+// (оно раньше today и выпадало из выборки) — вместо этого хватала голый шаблон
+// того же дня недели через неделю вперёд, который в окно попадал. Разовое
+// исключение в прошлом так же легко теряется, как и в будущем.
+const PLAN_PAST_DAYS = 2;
+const PLAN_FUTURE_DAYS = 14; // включая сегодня
 
 export function formatPlanSection(user) {
   const plan = getWeeklyPlan(user.telegram_id);
   const today = belgradeTodayISO();
-  const overrides = getActiveOverrides(user.telegram_id, today);
+  const windowStartISO = addDaysISO(today, -PLAN_PAST_DAYS);
+  const overrides = getActiveOverrides(user.telegram_id, windowStartISO);
   const overrideByDate = new Map(overrides.map((o) => [o.date, o.workout]));
 
   const hasTemplate = plan && WEEKDAY_ORDER.some((day) => plan[day]);
@@ -118,12 +126,13 @@ export function formatPlanSection(user) {
     return 'Текущий план тренировок: ещё не составлен. Если пользователь просит план или расписание — составь его и сохрани через update_plan.';
   }
 
-  const lastWindowISO = addDaysISO(today, PLAN_WINDOW_DAYS - 1);
+  const lastWindowISO = addDaysISO(today, PLAN_FUTURE_DAYS - 1);
+  const DAY_LABELS = { [-2]: 'ПОЗАВЧЕРА, ', [-1]: 'ВЧЕРА, ', 0: 'СЕГОДНЯ, ', 1: 'ЗАВТРА, ' };
   const rows = [];
-  for (let i = 0; i < PLAN_WINDOW_DAYS; i++) {
+  for (let i = -PLAN_PAST_DAYS; i < PLAN_FUTURE_DAYS; i++) {
     const iso = addDaysISO(today, i);
     const col = isoWeekdayColumn(iso);
-    const prefix = i === 0 ? 'СЕГОДНЯ, ' : i === 1 ? 'ЗАВТРА, ' : '';
+    const prefix = DAY_LABELS[i] ?? '';
     const changed = overrideByDate.has(iso);
     const workout = changed ? overrideByDate.get(iso) : plan?.[col] || 'тренировки нет';
     rows.push(`- ${prefix}${WEEKDAY_LABELS[col]} ${ddmm(iso)}: ${workout}${changed ? '  [разовое изменение на этот день]' : ''}`);
@@ -133,7 +142,7 @@ export function formatPlanSection(user) {
     .filter((o) => o.date > lastWindowISO)
     .map((o) => `- ${WEEKDAY_LABELS[isoWeekdayColumn(o.date)]} ${ddmm(o.date)}: ${o.workout}`);
 
-  return `Текущий план тренировок — готовый календарь (постоянная недельная схема и разовые изменения на даты уже сведены вместе):
+  return `Текущий план тренировок — готовый календарь на прошлые и ближайшие дни (постоянная недельная схема и разовые изменения на даты уже сведены вместе):
 
 ${rows.join('\n')}${beyond.length ? `\n\nДальше по датам:\n${beyond.join('\n')}` : ''}
 
@@ -144,19 +153,25 @@ ${rows.join('\n')}${beyond.length ? `\n\nДальше по датам:\n${beyond
 - Меняешь план или ставишь разовое исключение — вызови update_plan.`;
 }
 
-// Короткая выжимка на 3 дня. Приклеивается к последнему сообщению пользователя
-// в самом вызове API (не в БД) — это последнее, что модель видит перед ответом,
-// поэтому рекенси работает на нас: свежий факт бьёт «что обсуждали 2 реплики назад».
+// Короткая выжимка на 4 дня (вчера тоже — «как прошло вчера» после утреннего
+// чек-ина встречается постоянно). Приклеивается к последнему сообщению
+// пользователя в самом вызове API (не в БД) — это последнее, что модель видит
+// перед ответом, поэтому рекенси работает на нас: свежий факт бьёт «что
+// обсуждали 2 реплики назад».
 export function buildDayAnchor(user) {
   const plan = getWeeklyPlan(user.telegram_id);
   const today = belgradeTodayISO();
-  const overrides = getActiveOverrides(user.telegram_id, today);
+  const overrides = getActiveOverrides(user.telegram_id, addDaysISO(today, -1));
   const overrideByDate = new Map(overrides.map((o) => [o.date, o.workout]));
 
   const hasPlan = (plan && WEEKDAY_ORDER.some((day) => plan[day])) || overrides.length > 0;
   if (!hasPlan) return '';
 
-  const lines = ['сегодня', 'завтра', 'послезавтра'].map((label, i) => {
+  const lines = [
+    ['вчера', -1],
+    ['сегодня', 0],
+    ['завтра', 1],
+  ].map(([label, i]) => {
     const iso = addDaysISO(today, i);
     const col = isoWeekdayColumn(iso);
     const workout = overrideByDate.get(iso) ?? plan?.[col] ?? 'тренировки нет';
