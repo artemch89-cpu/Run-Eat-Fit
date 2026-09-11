@@ -114,6 +114,20 @@ db.exec(`
   )
 `);
 
+// Структурные поля бега — рядом со свободным actual/note, специально чтобы
+// в будущем те же колонки могла заполнять синхронизация с часами
+// (Strava/Garmin/Apple, сейчас вручную из разговора). TEXT, не REAL — держим
+// стиль консистентным с остальными «числовыми» полями проекта (age/weight/
+// height/fitness_test_*), SQLite не типизирован жёстко (type affinity), это
+// не мешает будущей синхронизации писать туда числа.
+for (const column of ['distance_km', 'avg_pace_min_km', 'avg_hr']) {
+  try {
+    db.exec(`ALTER TABLE training_log ADD COLUMN ${column} TEXT`);
+  } catch {
+    // колонка уже есть
+  }
+}
+
 // users.fitness_test_* — снимок последнего теста (перезаписывается, нужен
 // для formatFitnessTestSection). Эта таблица — история ВСЕХ тестов, append-
 // only (без UNIQUE — повторный тест в тот же день допустим), чтобы потом
@@ -265,16 +279,34 @@ export function getTrainingLogForDate(telegramId, date) {
 // запланировано на момент отчёта, не пользовательский ввод — код резолвит
 // заново при каждом вызове). status/actual/note — последний непустой ответ
 // выигрывает по каждому полю отдельно, не склейка истории дня.
-export function upsertTrainingLog(telegramId, date, { planned, status, actual, note }) {
+export function upsertTrainingLog(
+  telegramId,
+  date,
+  { planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr },
+) {
   db.prepare(
-    `INSERT INTO training_log (telegram_id, date, planned, status, actual, note) VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO training_log (telegram_id, date, planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(telegram_id, date) DO UPDATE SET
        planned = excluded.planned,
        status = COALESCE(excluded.status, training_log.status),
        actual = COALESCE(excluded.actual, training_log.actual),
        note = COALESCE(excluded.note, training_log.note),
+       distance_km = COALESCE(excluded.distance_km, training_log.distance_km),
+       avg_pace_min_km = COALESCE(excluded.avg_pace_min_km, training_log.avg_pace_min_km),
+       avg_hr = COALESCE(excluded.avg_hr, training_log.avg_hr),
        updated_at = CURRENT_TIMESTAMP`,
-  ).run(telegramId, date, planned ?? null, status ?? null, actual ?? null, note ?? null);
+  ).run(
+    telegramId,
+    date,
+    planned ?? null,
+    status ?? null,
+    actual ?? null,
+    note ?? null,
+    distance_km ?? null,
+    avg_pace_min_km ?? null,
+    avg_hr ?? null,
+  );
 }
 
 export function saveFitnessTestResults(telegramId, results) {

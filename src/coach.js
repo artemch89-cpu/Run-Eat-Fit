@@ -134,6 +134,9 @@ const TRAINING_LOG_TOOL = {
       },
       actual: { type: 'string', description: 'Что реально сделал, например «5 км в спокойном темпе вместо силовой»' },
       note: { type: 'string', description: 'Самочувствие/контекст, например «было тяжело, мало спал»' },
+      distance_km: { type: 'string', description: 'Дистанция в км, например «5.2» — если пользователь назвал цифрой' },
+      avg_pace_min_km: { type: 'string', description: 'Средний темп мин/км, например «5:30»' },
+      avg_hr: { type: 'string', description: 'Средний пульс за тренировку, например «148»' },
     },
     required: ['status'],
   },
@@ -142,7 +145,15 @@ const TRAINING_LOG_TOOL = {
 function applyTrainingLogToolCall(telegramId, input) {
   const iso = input.date || belgradeTodayISO();
   const planned = resolveDayWorkout(telegramId, iso);
-  upsertTrainingLog(telegramId, iso, { planned, status: input.status, actual: input.actual, note: input.note });
+  upsertTrainingLog(telegramId, iso, {
+    planned,
+    status: input.status,
+    actual: input.actual,
+    note: input.note,
+    distance_km: input.distance_km,
+    avg_pace_min_km: input.avg_pace_min_km,
+    avg_hr: input.avg_hr,
+  });
 }
 
 // Календарь отдаём модели уже СВЕДЁННЫМ: на каждый день одна строка, разовые
@@ -426,6 +437,7 @@ const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер �
 Журнал фактов (отдельно от плана — план это намерение, журнал это что реально было):
 - Пользователь рассказывает, что сделал или не сделал (сбегал, пропустил, сделал частично, отдохнул как планировалось) — вызови log_training_day. Это не то же самое, что update_plan: факт о прошлом, а не изменение будущей схемы.
 - Не путай с изменением плана («давай завтра лучше бег вместо силовой» — это update_plan) и с предположениями о будущем («наверное сегодня не успею» — это вообще не факт, ничего не вызывай, пока не станет известно точно).
+- Если пользователь называет конкретные цифры пробежки — дистанцию, темп, пульс — впиши их в поля distance_km/avg_pace_min_km/avg_hr у log_training_day, а не только в свободный текст actual.
 
 Замеры тела (не путай с тестом физической готовности и не с журналом тренировок):
 - Пользователь сообщает вес и/или объёмы (талия/грудь/бёдра) — вызови log_body_measurements. Это отдельный tool от save_fitness_test_results (тот про отжимания/планку/пульс/бег) и от log_training_day (тот про факт тренировки).
