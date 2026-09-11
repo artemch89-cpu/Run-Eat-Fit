@@ -104,6 +104,41 @@ function applyPlanToolCall(telegramId, input) {
   }
 }
 
+// Журнал ФАКТОВ — что реально было, а не что планировалось (update_plan).
+// Разграничитель для модели — время действия: update_plan про будущее и
+// намерение, log_training_day про уже случившееся.
+const TRAINING_LOG_TOOL = {
+  name: 'log_training_day',
+  description:
+    'Зафиксируй факт — что реально произошло с тренировкой в конкретный день, уже случившееся, не намерение и не план. ' +
+    'Вызывай, когда пользователь рассказывает, что сделал или не сделал: «сбегал 5 км», «пропустил, не было сил», ' +
+    '«сделал только половину», «сегодня по плану отдых, так и было». ' +
+    'НЕ вызывай при обсуждении будущего плана или его изменения («давай завтра лучше бег вместо силовой») — для этого update_plan. ' +
+    'НЕ вызывай для предположений о будущем («наверное сегодня не успею») — только когда факт уже известен. ' +
+    'Если день не указан явно — это сегодня; для другого дня вычисли точную дату от строки «Сейчас:» в конце промпта.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      date: { type: 'string', description: 'ГГГГ-ММ-ДД, только если пользователь говорит про день, отличный от сегодня' },
+      status: {
+        type: 'string',
+        enum: ['done', 'partial', 'skipped', 'rest', 'sick'],
+        description:
+          'done — выполнил как планировалось, partial — частично, skipped — пропустил, rest — плановый отдых, sick — не смог по болезни/травме',
+      },
+      actual: { type: 'string', description: 'Что реально сделал, например «5 км в спокойном темпе вместо силовой»' },
+      note: { type: 'string', description: 'Самочувствие/контекст, например «было тяжело, мало спал»' },
+    },
+    required: ['status'],
+  },
+};
+
+function applyTrainingLogToolCall(telegramId, input) {
+  const iso = input.date || belgradeTodayISO();
+  const planned = resolveDayWorkout(telegramId, iso);
+  upsertTrainingLog(telegramId, iso, { planned, status: input.status, actual: input.actual, note: input.note });
+}
+
 // Календарь отдаём модели уже СВЕДЁННЫМ: на каждый день одна строка, разовые
 // исключения уже наложены на постоянную схему. Модель ничего не вычисляет и не
 // сопоставляет — просто читает строку нужного дня. Это убирает класс ошибок
@@ -297,6 +332,10 @@ const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер �
 - Если даёшь развёрнутый план или расписание на несколько дней — сразу дай понять, что это ориентир, а не то, что нужно запомнить наизусть. Скажи, что будешь на связи каждый день: пользователь делится самочувствием, а план вы вместе подстраиваете под него.
 - Если только что выдал(а) план тренировок или разговор плотно касался питания — предложи составить список покупок для сбалансированного и вкусного питания. Для этого на отдельной строке в конце ответа поставь маркер [[SPLIT]], а сразу после него — короткое предложение вроде «Если хочешь, могу составить список покупок для сбалансированного, вкусного питания!». Это уйдёт отдельным сообщением. Если предложение неуместно (обычный короткий разговор, вопрос не по теме) — маркер не добавляй.
 
+Журнал фактов (отдельно от плана — план это намерение, журнал это что реально было):
+- Пользователь рассказывает, что сделал или не сделал (сбегал, пропустил, сделал частично, отдохнул как планировалось) — вызови log_training_day. Это не то же самое, что update_plan: факт о прошлом, а не изменение будущей схемы.
+- Не путай с изменением плана («давай завтра лучше бег вместо силовой» — это update_plan) и с предположениями о будущем («наверное сегодня не успею» — это вообще не факт, ничего не вызывай, пока не станет известно точно).
+
 Ежедневный чек-ин:
 - Сообщение с текстом ровно ${CHECKIN_TRIGGER} — это не реплика пользователя, а системный сигнал: настало выбранное им время, и сейчас пишешь первым ты. Не упоминай этот текст и не реагируй на него как на вопрос — вместо этого сам инициируй короткое сообщение с минимальным порогом входа (например «одним словом — как ты сегодня?», «как спалось, как тело после вчерашнего?»), без «отчитайся о тренировке».
 - Это сообщение — только сам вопрос, ничего больше. Не добавляй к нему ремарки, уточнения или комментарии в скобках («и да, сегодня можно отдыхать» и т.п.) — реальные люди в утреннем сообщении так не пишут, это разбивает на два смысловых куска то, что должно быть одной короткой репликой. Всё, что хочешь сказать по плану на сегодня — прибереги для следующего ответа, после того как пользователь откликнется.
@@ -404,7 +443,7 @@ function requestCoach(user, messages, maxTokens) {
     model: COACH_MODEL,
     max_tokens: maxTokens,
     system: buildSystemPrompt(user),
-    tools: [PLAN_TOOL, FITNESS_TEST_TOOL],
+    tools: [PLAN_TOOL, FITNESS_TEST_TOOL, TRAINING_LOG_TOOL],
     messages: appendDayAnchor(user, messages),
   });
 }
@@ -412,16 +451,29 @@ function requestCoach(user, messages, maxTokens) {
 // Разбирает ответ модели: применяет вызовы инструментов, возвращает текст для
 // пользователя. null — если модель не дала ничего пригодного (ни текста, ни
 // инструмента); тогда callCoach решает, повторять или падать.
+// Заглушка на случай, если модель вызвала tool, но не сопроводила его
+// текстом (промпт просит так не делать, но подстраховка нужна) — по
+// последнему вызванному tool'у, чтобы не говорить «обновил план» про лог.
+const TOOL_FALLBACK_REPLY = {
+  update_plan: 'Обновил план.',
+  save_fitness_test_results: 'Записал результаты теста.',
+  log_training_day: 'Записал.',
+};
+
 function extractReply(user, response) {
-  let calledTool = false;
+  let fallbackReply = null;
   for (const block of response.content) {
     if (block.type === 'tool_use' && block.name === 'update_plan') {
       applyPlanToolCall(user.telegram_id, block.input);
-      calledTool = true;
+      fallbackReply = TOOL_FALLBACK_REPLY.update_plan;
     }
     if (block.type === 'tool_use' && block.name === 'save_fitness_test_results') {
       applyFitnessTestToolCall(user.telegram_id, block.input);
-      calledTool = true;
+      fallbackReply = TOOL_FALLBACK_REPLY.save_fitness_test_results;
+    }
+    if (block.type === 'tool_use' && block.name === 'log_training_day') {
+      applyTrainingLogToolCall(user.telegram_id, block.input);
+      fallbackReply = TOOL_FALLBACK_REPLY.log_training_day;
     }
   }
 
@@ -430,10 +482,7 @@ function extractReply(user, response) {
     const rawText = textBlocks.map((block) => block.text).join('\n\n');
     return markdownToTelegramHtml(correctDateMentions(rawText));
   }
-  if (calledTool) {
-    return 'Обновил план.';
-  }
-  return null;
+  return fallbackReply;
 }
 
 async function callCoach(user, messages) {
