@@ -109,11 +109,19 @@ async function dayCloseTick() {
   }
 }
 
+// Постоянная reply-клавиатура (не inline — крепится к сообщению и остаётся
+// видна снизу чата для ВСЕХ следующих сообщений, Telegram сам добавляет
+// иконку скрыть/показать). Отдельная кнопка на каждое будущее действие —
+// сейчас только профиль, остальное (тренер/нутрициолог-тумблеры, дайджесты,
+// тихий режим) осознанно не делаем, под них пока нет функциональности.
+const PROFILE_BUTTON = '👤 Мой профиль';
+const MAIN_KEYBOARD = { keyboard: [[PROFILE_BUTTON]], resize_keyboard: true };
+
 async function askNextStep(ctx, telegramId) {
   const user = getUser(telegramId);
   const step = getNextStep(user);
   if (!step) {
-    return ctx.reply(completionMessage());
+    return ctx.reply(completionMessage(), { reply_markup: MAIN_KEYBOARD });
   }
   if (isTextStep(step)) {
     return ctx.reply(getTextStepPrompt(step));
@@ -129,7 +137,7 @@ bot.start((ctx) => {
 
 const MEASUREMENT_LABELS = { waist: 'Талия', chest: 'Грудь', hips: 'Бёдра' };
 
-bot.command('profile', (ctx) => {
+function sendProfile(ctx) {
   const user = getUser(ctx.from.id);
   if (!user || !isProfileComplete(user)) {
     return ctx.reply('Сначала закончи анкету — напиши /start.');
@@ -140,14 +148,19 @@ bot.command('profile', (ctx) => {
     .map((f) => `${MEASUREMENT_LABELS[f]}: ${user[f]}`);
   const extrasBlock = extras.length ? `\n\nПоследние замеры:\n${extras.join('\n')}` : '';
 
+  // inline_keyboard тут — Telegram позволяет только один reply_markup на
+  // сообщение, постоянная клавиатура (MAIN_KEYBOARD) сюда не крепится,
+  // она уже висит снизу чата с момента завершения анкеты.
   const keyboard = {
     inline_keyboard: Object.entries(PROFILE_FIELD_LABELS).map(([field, label]) => [
       { text: `Изменить: ${label}`, callback_data: `profile_edit:${field}` },
     ]),
   };
 
-  ctx.reply(`${describeProfile(user)}${extrasBlock}`, { reply_markup: keyboard });
-});
+  return ctx.reply(`${describeProfile(user)}${extrasBlock}`, { reply_markup: keyboard });
+}
+
+bot.command('profile', (ctx) => sendProfile(ctx));
 
 bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   const [, field, value] = ctx.match;
@@ -185,6 +198,10 @@ bot.action(/^profile_edit:(.+)$/, async (ctx) => {
 bot.on('text', async (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user) return;
+
+  if (ctx.message.text === PROFILE_BUTTON) {
+    return sendProfile(ctx);
+  }
 
   if (user.pending_edit_field) {
     const field = user.pending_edit_field;
