@@ -368,4 +368,39 @@ export function markMeasurementOffered(telegramId, todayISO) {
   ).run(todayISO, telegramId);
 }
 
+// OAuth-токены Strava, по одному активному подключению на юзера.
+// strava_athlete_id — обратная связка: вебхук Strava присылает только его
+// (owner_id), нужно найти, какому telegram_id он принадлежит.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS strava_tokens (
+    telegram_id INTEGER PRIMARY KEY,
+    strava_athlete_id INTEGER UNIQUE,
+    access_token TEXT,
+    refresh_token TEXT,
+    expires_at INTEGER,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+export function upsertStravaTokens(telegramId, { stravaAthleteId, accessToken, refreshToken, expiresAt }) {
+  db.prepare(
+    `INSERT INTO strava_tokens (telegram_id, strava_athlete_id, access_token, refresh_token, expires_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(telegram_id) DO UPDATE SET
+       strava_athlete_id = excluded.strava_athlete_id,
+       access_token = excluded.access_token,
+       refresh_token = excluded.refresh_token,
+       expires_at = excluded.expires_at,
+       updated_at = CURRENT_TIMESTAMP`,
+  ).run(telegramId, stravaAthleteId, accessToken, refreshToken, expiresAt);
+}
+
+export function getStravaTokensByTelegramId(telegramId) {
+  return db.prepare('SELECT * FROM strava_tokens WHERE telegram_id = ?').get(telegramId);
+}
+
+export function getStravaTokensByAthleteId(athleteId) {
+  return db.prepare('SELECT * FROM strava_tokens WHERE strava_athlete_id = ?').get(athleteId);
+}
+
 export default db;

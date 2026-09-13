@@ -32,6 +32,8 @@ import {
   PROFILE_FIELD_LABELS,
 } from './onboarding.js';
 import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, getCoachPhotoReply, BOT_TIMEZONE } from './coach.js';
+import { buildAuthorizeUrl } from './strava.js';
+import { createWebhookServer } from './webhookServer.js';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -168,6 +170,12 @@ function sendProfile(ctx) {
 }
 
 bot.command('profile', (ctx) => sendProfile(ctx));
+
+bot.command('connect_strava', (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (!user || getNextStep(user)) return ctx.reply('Сначала закончи анкету — напиши /start.');
+  return ctx.reply(`Подключи Strava: ${buildAuthorizeUrl(ctx.from.id)}`);
+});
 
 bot.action(/^(goal|gender|activity|tone):(.+)$/, async (ctx) => {
   const [, field, value] = ctx.match;
@@ -325,6 +333,11 @@ bot.on('photo', (ctx) => {
 
 bot.launch();
 console.log('Run Eat Fit bot started');
+
+const webhookServer = createWebhookServer(bot);
+webhookServer.listen(process.env.WEBHOOK_PORT || 3000, () => {
+  console.log(`Strava webhook server on port ${process.env.WEBHOOK_PORT || 3000}`);
+});
 
 setInterval(checkinTick, 60 * 1000);
 setInterval(dayCloseTick, 60 * 1000);
