@@ -205,6 +205,17 @@ export function getHistory(telegramId, limit = 20) {
   return rows.reverse();
 }
 
+// Календарная дата (в заданном часовом поясе) последнего сообщения ОТ юзера —
+// чтобы чек-ин мог проверить «а не писал ли он мне уже сегодня сам».
+export function getLastUserMessageDate(telegramId, timeZone) {
+  const row = db
+    .prepare("SELECT created_at FROM messages WHERE telegram_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1")
+    .get(telegramId);
+  if (!row) return null;
+  const utcDate = new Date(`${row.created_at.replace(' ', 'T')}Z`);
+  return utcDate.toLocaleDateString('en-CA', { timeZone });
+}
+
 export function getUsersDueForCheckin(hhmm, today) {
   return db
     .prepare(
