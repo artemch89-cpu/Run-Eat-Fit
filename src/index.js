@@ -8,6 +8,7 @@ import {
   getHistory,
   getUsersDueForCheckin,
   markCheckinSent,
+  getLastUserMessageDate,
   getUsersDueForDayClose,
   markDayCloseSent,
   setPendingEditField,
@@ -77,6 +78,12 @@ async function checkinTick() {
   const dueUsers = getUsersDueForCheckin(hhmm, today);
   for (const user of dueUsers) {
     try {
+      if (getLastUserMessageDate(user.telegram_id, BOT_TIMEZONE) === today) {
+        // пользователь уже писал сегодня сам до времени чек-ина — контакт уже
+        // был, стандартное «как спалось» тут неуместно, просто закрываем день
+        markCheckinSent(user.telegram_id, today);
+        continue;
+      }
       const history = getHistory(user.telegram_id);
       const reply = await getCheckinTrigger(user, history);
       addMessage(user.telegram_id, 'assistant', reply);
@@ -246,32 +253,74 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// Только сжатые фото (ctx.message.photo) — не document-файлы. Берём
-// предпоследний размер массива (Telegram отдаёт от меньшего к большему) —
-// «стандартное» разрешение, не миниатюра и не полноразмерный оригинал.
-bot.on('photo', async (ctx) => {
-  const user = getUser(ctx.from.id);
+// Telegram присылает альбом (несколько фото одним действием пользователя)
+// как отдельные апдейты с общим media_group_id, без гарантии, что они придут
+// одним батчем. Копим их здесь и обрабатываем разом одним вызовом коуча —
+// иначе на 3 фото прилетает 3 несогласованных ответа (и 3x стоимость истории
+// в каждом вызове, т.к. история не кэшируется — кэш только на системный
+// промпт). Буферизация (push + сброс таймера) синхронна — Node однопоточный,
+// гонки между апдейтами одной группы исключены, пока тут нет await.
+const ALBUM_DEBOUNCE_MS = 1200; // Telegram обычно доставляет альбом за < 1с, запас на сеть
+const pendingPhotoGroups = new Map(); // `${telegramId}:${mediaGroupId}` -> { photos, ctx, timer }
+
+async function flushPhotoGroup(ctx, telegramId, photos) {
+  const user = getUser(telegramId);
   if (!user || getNextStep(user)) return; // анкета не завершена — фото пока не обрабатываем
 
-  const sizes = ctx.message.photo;
-  if (!sizes?.length) return;
-  const chosen = sizes.length >= 2 ? sizes[sizes.length - 2] : sizes[0];
-  const caption = ctx.message.caption || '';
-
-  addMessage(ctx.from.id, 'user', caption ? `[Фото еды] ${caption}` : '[Фото еды]');
-  const history = getHistory(ctx.from.id);
+  const caption = photos.find((p) => p.caption)?.caption || '';
+  const countSuffix = photos.length > 1 ? ` x${photos.length}` : '';
+  addMessage(telegramId, 'user', caption ? `[Фото еды${countSuffix}] ${caption}` : `[Фото еды${countSuffix}]`);
+  const history = getHistory(telegramId);
 
   try {
-    const fileUrl = await ctx.telegram.getFileLink(chosen.file_id);
-    const res = await fetch(fileUrl.href);
-    const data = Buffer.from(await res.arrayBuffer()).toString('base64');
-    const reply = await getCoachPhotoReply(user, history, { data, mediaType: 'image/jpeg' }, caption);
-    addMessage(ctx.from.id, 'assistant', reply);
+    const images = [];
+    for (const p of photos) {
+      const fileUrl = await ctx.telegram.getFileLink(p.fileId);
+      const res = await fetch(fileUrl.href);
+      const data = Buffer.from(await res.arrayBuffer()).toString('base64');
+      images.push({ data, mediaType: 'image/jpeg' });
+    }
+    const reply = await getCoachPhotoReply(user, history, images, caption);
+    addMessage(telegramId, 'assistant', reply);
     await sendCoachReply(ctx.telegram, ctx.chat.id, reply);
   } catch (err) {
     console.error('Photo coach reply error:', err);
     ctx.reply('Не получилось разобрать фото — сбой на моей стороне. Попробуй ещё раз чуть позже.');
   }
+}
+
+// Только сжатые фото (ctx.message.photo) — не document-файлы. Берём
+// предпоследний размер массива (Telegram отдаёт от меньшего к большему) —
+// «стандартное» разрешение, не миниатюра и не полноразмерный оригинал.
+bot.on('photo', (ctx) => {
+  const user = getUser(ctx.from.id);
+  if (!user || getNextStep(user)) return;
+
+  const sizes = ctx.message.photo;
+  if (!sizes?.length) return;
+  const chosen = sizes.length >= 2 ? sizes[sizes.length - 2] : sizes[0];
+  const photoItem = { fileId: chosen.file_id, caption: ctx.message.caption || '', messageId: ctx.message.message_id };
+
+  const groupId = ctx.message.media_group_id;
+  if (!groupId) {
+    flushPhotoGroup(ctx, ctx.from.id, [photoItem]);
+    return;
+  }
+
+  const key = `${ctx.from.id}:${groupId}`;
+  let entry = pendingPhotoGroups.get(key);
+  if (!entry) {
+    entry = { photos: [] };
+    pendingPhotoGroups.set(key, entry);
+  }
+  entry.photos.push(photoItem);
+  entry.ctx = ctx; // держим последний ctx — telegram/chat одинаковы для всех апдейтов группы
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    pendingPhotoGroups.delete(key);
+    entry.photos.sort((a, b) => a.messageId - b.messageId);
+    flushPhotoGroup(entry.ctx, ctx.from.id, entry.photos);
+  }, ALBUM_DEBOUNCE_MS);
 });
 
 bot.launch();

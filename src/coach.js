@@ -657,19 +657,24 @@ export async function getDayCloseTrigger(user, history) {
 }
 
 // Фото еды: история уже содержит лёгкий текстовый плейсхолдер последней
-// записью (сама картинка в БД не хранится — разовая, большая, не нужна для
+// записью (сами картинки в БД не хранятся — разовые, большие, не нужны для
 // памяти). Подменяем его на мультимодальный блок только для этого вызова API.
-function buildPhotoUserMessage(caption, photo) {
+// photos — массив (альбом из Telegram может прийти несколькими фото одного
+// блюда/события сразу — группируется на уровне index.js до вызова этой функции).
+function buildPhotoUserMessage(caption, photos) {
   return {
     role: 'user',
     content: [
-      { type: 'image', source: { type: 'base64', media_type: photo.mediaType, data: photo.data } },
+      ...photos.map((photo) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: photo.mediaType, data: photo.data },
+      })),
       { type: 'text', text: caption || 'Вот что я сейчас ем.' },
     ],
   };
 }
 
-export async function getCoachPhotoReply(user, history, photo, caption) {
-  const messages = [...history.slice(0, -1), buildPhotoUserMessage(caption, photo)];
+export async function getCoachPhotoReply(user, history, photos, caption) {
+  const messages = [...history.slice(0, -1), buildPhotoUserMessage(caption, photos)];
   return callCoach(user, messages);
 }
