@@ -16,7 +16,17 @@ import {
 } from './db.js';
 import { parseAge, parseWeight, parseHeight, parseCheckinTime } from './onboarding.js';
 
-const anthropic = new Anthropic();
+// Провайдер модели коуча переключается через LLM_PROVIDER (anthropic|deepseek),
+// по умолчанию anthropic — чтобы ничего не менялось для тех, кто не завёл
+// DEEPSEEK_API_KEY. DeepSeek отдаёт Anthropic-совместимый эндпоинт
+// (api.deepseek.com/anthropic), поэтому используется тот же SDK и тот же
+// формат запроса (tools/messages/system) — меняются только baseURL, ключ и
+// имя модели. cache_control в system-промпте DeepSeek молча игнорирует
+// (не поддерживает пока), запрос от этого не падает.
+const LLM_PROVIDER = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'anthropic';
+const anthropic = LLM_PROVIDER === 'deepseek'
+  ? new Anthropic({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com/anthropic' })
+  : new Anthropic();
 
 const TONE_DESCRIPTIONS = {
   строгий: 'Строгий, но справедливый — прямо указывай на слабые места, дожимай, без сюсюканья.',
@@ -108,6 +118,28 @@ function applyPlanToolCall(telegramId, input) {
       if (date && workout) upsertOverride(telegramId, date, workout);
     }
   }
+}
+
+// Резервный текст для случая, когда модель вызвала update_plan, но не дала
+// сопроводительный текст (замечено на DeepSeek — иногда происходит даже с
+// запасом по токенам, не только при обрезании по лимиту). Строим из того, что
+// реально только что сохранили, а не из общей заглушки — юзер должен видеть
+// расписание, а не «Обновил план.» без деталей.
+function describePlanUpdate(input) {
+  const lines = [];
+  if (input.weekly_template) {
+    for (const day of WEEKDAY_ORDER) {
+      const workout = input.weekly_template[day];
+      if (workout) lines.push(`${WEEKDAY_LABELS[day]}: ${workout}`);
+    }
+  }
+  if (Array.isArray(input.date_overrides)) {
+    for (const { date, workout } of input.date_overrides) {
+      if (date && workout) lines.push(`${ddmm(date)}: ${workout}`);
+    }
+  }
+  if (lines.length === 0) return TOOL_FALLBACK_REPLY.update_plan;
+  return `Обновил план:\n${lines.map((l) => `- ${l}`).join('\n')}`;
 }
 
 // Журнал ФАКТОВ — что реально было, а не что планировалось (update_plan).
@@ -447,6 +479,8 @@ const FROZEN_INSTRUCTIONS = `Ты — персональный AI-тренер �
 - Пользователь явно сообщает, что что-то из этого изменилось или было неверно указано («вообще-то мне 32, а не 30», «поменяй время чек-ина на 9 утра», «хочу более мягкий тон») — вызови update_profile с тем полем, которое он назвал.
 - Это НЕ вес/объёмы для регулярных замеров (для этого log_body_measurements) и не факт тренировки (для этого log_training_day) — а именно исправление/обновление базовых данных о человеке.
 
+Важно про все инструменты выше: вызов инструмента сохраняет данные в фоне, но сам по себе ничего не показывает пользователю. В том же ответе, где вызываешь инструмент, ВСЕГДА добавляй текстовый блок с человеческой репликой — никогда не ограничивайся только вызовом без текста. Для update_plan текст обязателен и содержательный: опиши расписание по дням, как указано ниже в «Подача плана». Для остальных инструментов достаточно короткого живого подтверждения.
+
 Ежедневный чек-ин:
 - Сообщение с текстом ровно ${CHECKIN_TRIGGER} — это не реплика пользователя, а системный сигнал: настало выбранное им время, и сейчас пишешь первым ты. Не упоминай этот текст и не реагируй на него как на вопрос — вместо этого сам инициируй короткое сообщение с минимальным порогом входа (например «одним словом — как ты сегодня?», «как спалось, как тело после вчерашнего?»), без «отчитайся о тренировке».
 - Это сообщение — только сам вопрос, ничего больше. Не добавляй к нему ремарки, уточнения или комментарии в скобках («и да, сегодня можно отдыхать» и т.п.) — реальные люди в утреннем сообщении так не пишут, это разбивает на два смысловых куска то, что должно быть одной короткой репликой. Всё, что хочешь сказать по плану на сегодня — прибереги для следующего ответа, после того как пользователь откликнется.
@@ -564,7 +598,7 @@ function correctDateMentions(text) {
   return fixed;
 }
 
-const COACH_MODEL = 'claude-haiku-4-5';
+const COACH_MODEL = LLM_PROVIDER === 'deepseek' ? 'deepseek-flash' : 'claude-haiku-4-5';
 const COACH_MAX_TOKENS = 1500;
 const COACH_MAX_TOKENS_RETRY = 3000;
 
@@ -599,7 +633,7 @@ function extractReply(user, response) {
   for (const block of response.content) {
     if (block.type === 'tool_use' && block.name === 'update_plan') {
       applyPlanToolCall(user.telegram_id, block.input);
-      fallbackReply = TOOL_FALLBACK_REPLY.update_plan;
+      fallbackReply = describePlanUpdate(block.input);
     }
     if (block.type === 'tool_use' && block.name === 'save_fitness_test_results') {
       applyFitnessTestToolCall(user.telegram_id, block.input);
@@ -627,13 +661,19 @@ function extractReply(user, response) {
   return fallbackReply;
 }
 
+const TOOL_FALLBACK_VALUES = new Set(Object.values(TOOL_FALLBACK_REPLY));
+
 async function callCoach(user, messages) {
   let response = await requestCoach(user, messages, COACH_MAX_TOKENS);
+  if (process.env.DEBUG_USAGE) console.error('[usage]', LLM_PROVIDER, JSON.stringify(response.usage));
   let reply = extractReply(user, response);
 
-  // Упёрлись в лимит и не успели выдать ни текст, ни вызов инструмента —
-  // один повтор с запасом по токенам.
-  if (reply === null && response.stop_reason === 'max_tokens') {
+  // Упёрлись в лимит токенов — либо вообще без ответа, либо tool вызван, но
+  // сопроводительный текст после него не поместился в бюджет (замечено на
+  // DeepSeek: подробный JSON плана в аргументах tool съедает почти весь
+  // COACH_MAX_TOKENS). В обоих случаях один повтор с запасом по токенам —
+  // иначе юзер вместо плана видит голое «Обновил план.».
+  if (response.stop_reason === 'max_tokens' && (reply === null || TOOL_FALLBACK_VALUES.has(reply))) {
     response = await requestCoach(user, messages, COACH_MAX_TOKENS_RETRY);
     reply = extractReply(user, response);
   }
