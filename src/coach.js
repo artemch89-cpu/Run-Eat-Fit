@@ -189,6 +189,33 @@ function applyTrainingLogToolCall(telegramId, input) {
   });
 }
 
+const TRAINING_STATUS_LABELS = {
+  done: 'выполнено',
+  partial: 'частично',
+  skipped: 'пропущено',
+  rest: 'плановый отдых',
+  sick: 'не смог — болезнь/травма',
+};
+
+// Тот же приём, что и для update_plan (см. describePlanUpdate) — резервный
+// текст строим из того, что реально сохранили, а не из общей заглушки.
+// 17.09.2026: именно эта заглушка ("Записал.") дважды сбила Артёма с толку —
+// один раз данные реально не сохранились (фото не дошли из-за прошлого
+// бага), другой раз сохранились правильно и детально, но текст был
+// одинаковым в обоих случаях, и отличить успех от провала можно было
+// только явно переспросив "что ты записал?".
+function describeTrainingLogUpdate(input) {
+  const facts = [];
+  if (input.status) facts.push(TRAINING_STATUS_LABELS[input.status] || input.status);
+  if (input.distance_km) facts.push(`${input.distance_km} км`);
+  if (input.avg_pace_min_km) facts.push(`темп ${input.avg_pace_min_km}/км`);
+  if (input.avg_hr) facts.push(`пульс ${input.avg_hr}`);
+  if (facts.length === 0) return TOOL_FALLBACK_REPLY.log_training_day;
+  const header = `Записал: ${facts.join(', ')}.`;
+  const extra = [input.actual, input.note].filter(Boolean).join(' — ');
+  return extra ? `${header}\n${extra}` : header;
+}
+
 // Календарь отдаём модели уже СВЕДЁННЫМ: на каждый день одна строка, разовые
 // исключения уже наложены на постоянную схему. Модель ничего не вычисляет и не
 // сопоставляет — просто читает строку нужного дня. Это убирает класс ошибок
@@ -643,7 +670,7 @@ function extractReply(user, response) {
     }
     if (block.type === 'tool_use' && block.name === 'log_training_day') {
       applyTrainingLogToolCall(user.telegram_id, block.input);
-      fallbackReply = TOOL_FALLBACK_REPLY.log_training_day;
+      fallbackReply = describeTrainingLogUpdate(block.input);
     }
     if (block.type === 'tool_use' && block.name === 'log_body_measurements') {
       applyBodyMeasurementsToolCall(user.telegram_id, block.input);
