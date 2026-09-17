@@ -720,6 +720,13 @@ function buildPhotoUserMessage(caption, photos) {
 }
 
 export async function getCoachPhotoReply(user, history, photos, caption) {
-  const messages = [...history.slice(0, -1), buildPhotoUserMessage(caption, photos)];
+  const lastMessage = buildPhotoUserMessage(caption, photos);
+  const messages = [...history.slice(0, -1), lastMessage];
+  // Диагностика бага 17.09.2026: подтверждаем, что до сборки запроса к
+  // модели в последнем сообщении реально лежат image-блоки, а не только
+  // текст — если тут будет меньше блоков, чем photos.length, значит
+  // проблема в buildPhotoUserMessage/history.slice, а не у провайдера.
+  const imageBlocks = lastMessage.content.filter((b) => b.type === 'image').length;
+  console.log(`[photo] в запрос к модели уходит ${imageBlocks} image-блоков из ${photos.length} фото`);
   return callCoach(user, messages);
 }

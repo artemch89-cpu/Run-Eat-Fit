@@ -303,8 +303,18 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
       const chosen = pickPhotoSize(p.sizes, photos.length);
       const fileUrl = await ctx.telegram.getFileLink(chosen.file_id);
       const res = await fetch(fileUrl.href);
-      const data = Buffer.from(await res.arrayBuffer()).toString('base64');
-      images.push({ data, mediaType: 'image/jpeg' });
+      const buf = Buffer.from(await res.arrayBuffer());
+      // Диагностика бага 17.09.2026 (альбом фото модель иногда "не видит"):
+      // magic — первые байты файла, у настоящего JPEG должно быть ffd8ff...
+      // Если тут когда-нибудь окажется НЕ ffd8ff или status не 200 — фото
+      // портится уже на этапе скачки из Telegram, а не в запросе к модели.
+      console.log(
+        `[photo] fetch ${chosen.width}x${chosen.height} status=${res.status} bytes=${buf.length} magic=${buf.subarray(0, 4).toString('hex')}`,
+      );
+      if (!res.ok) {
+        throw new Error(`Скачка фото из Telegram вернула HTTP ${res.status}`);
+      }
+      images.push({ data: buf.toString('base64'), mediaType: 'image/jpeg' });
     }
     const totalKb = Math.round(images.reduce((sum, img) => sum + img.data.length, 0) / 1024);
     console.log(`[photo] батч из ${photos.length}, суммарно base64 ~${totalKb} KB`);
