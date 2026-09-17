@@ -271,6 +271,21 @@ bot.on('text', async (ctx) => {
 const ALBUM_DEBOUNCE_MS = 1200; // Telegram обычно доставляет альбом за < 1с, запас на сеть
 const pendingPhotoGroups = new Map(); // `${telegramId}:${mediaGroupId}` -> { photos, ctx, timer }
 
+// Какой размер брать из массива sizes Telegram (от меньшего к большему).
+// Для одного-двух фото — предпоследний («стандартное» разрешение, не
+// миниатюра и не полноразмерный оригинал). Для альбома из 3+ фото сразу —
+// на тир ниже: иначе несколько «тяжёлых» фото (скриншоты тренировок,
+// плотные по деталям) суммарно раздувают запрос к модели. Найдено 17.09.2026:
+// альбом из 6 скриншотов пришёл к модели пустым (ни одной картинки) — размер
+// запроса не логировался, точную причину не подтвердили, но многофотный
+// альбом — единственное отличие от одиночных фото, которые всегда доходили.
+function pickPhotoSize(sizes, groupCount) {
+  if (sizes.length === 1) return sizes[0];
+  const stepBack = groupCount >= 3 ? 3 : 2;
+  const idx = Math.max(0, sizes.length - stepBack);
+  return sizes[idx];
+}
+
 async function flushPhotoGroup(ctx, telegramId, photos) {
   const user = getUser(telegramId);
   if (!user || getNextStep(user)) return; // анкета не завершена — фото пока не обрабатываем
@@ -283,11 +298,14 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
   try {
     const images = [];
     for (const p of photos) {
-      const fileUrl = await ctx.telegram.getFileLink(p.fileId);
+      const chosen = pickPhotoSize(p.sizes, photos.length);
+      const fileUrl = await ctx.telegram.getFileLink(chosen.file_id);
       const res = await fetch(fileUrl.href);
       const data = Buffer.from(await res.arrayBuffer()).toString('base64');
       images.push({ data, mediaType: 'image/jpeg' });
     }
+    const totalKb = Math.round(images.reduce((sum, img) => sum + img.data.length, 0) / 1024);
+    console.log(`[photo] батч из ${photos.length}, суммарно base64 ~${totalKb} KB`);
     const reply = await getCoachPhotoReply(user, history, images, caption);
     addMessage(telegramId, 'assistant', reply);
     await sendCoachReply(ctx.telegram, ctx.chat.id, reply);
@@ -297,17 +315,16 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
   }
 }
 
-// Только сжатые фото (ctx.message.photo) — не document-файлы. Берём
-// предпоследний размер массива (Telegram отдаёт от меньшего к большему) —
-// «стандартное» разрешение, не миниатюра и не полноразмерный оригинал.
+// Только сжатые фото (ctx.message.photo) — не document-файлы. Сам размер
+// выбирается позже в flushPhotoGroup (pickPhotoSize), когда известен
+// финальный размер альбома — тут сохраняем весь массив sizes как есть.
 bot.on('photo', (ctx) => {
   const user = getUser(ctx.from.id);
   if (!user || getNextStep(user)) return;
 
   const sizes = ctx.message.photo;
   if (!sizes?.length) return;
-  const chosen = sizes.length >= 2 ? sizes[sizes.length - 2] : sizes[0];
-  const photoItem = { fileId: chosen.file_id, caption: ctx.message.caption || '', messageId: ctx.message.message_id };
+  const photoItem = { sizes, caption: ctx.message.caption || '', messageId: ctx.message.message_id };
 
   const groupId = ctx.message.media_group_id;
   if (!groupId) {
