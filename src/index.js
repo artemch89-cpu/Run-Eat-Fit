@@ -277,7 +277,7 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
 
   const caption = photos.find((p) => p.caption)?.caption || '';
   const countSuffix = photos.length > 1 ? ` x${photos.length}` : '';
-  addMessage(telegramId, 'user', caption ? `[Фото еды${countSuffix}] ${caption}` : `[Фото еды${countSuffix}]`);
+  addMessage(telegramId, 'user', caption ? `[Фото${countSuffix}] ${caption}` : `[Фото${countSuffix}]`);
   const history = getHistory(telegramId);
 
   try {
