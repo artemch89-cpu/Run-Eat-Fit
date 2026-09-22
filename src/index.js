@@ -188,15 +188,36 @@ function sendProfile(ctx) {
   // сообщение, постоянная клавиатура (MAIN_KEYBOARD) сюда не крепится,
   // она уже висит снизу чата с момента завершения анкеты.
   const keyboard = {
-    inline_keyboard: Object.entries(PROFILE_FIELD_LABELS).map(([field, label]) => [
-      { text: `Изменить: ${label}`, callback_data: `profile_edit:${field}` },
-    ]),
+    inline_keyboard: [
+      ...Object.entries(PROFILE_FIELD_LABELS).map(([field, label]) => [
+        { text: `Изменить: ${label}`, callback_data: `profile_edit:${field}` },
+      ]),
+      [
+        {
+          text: user.challenge_mode ? '🏆 Режим челленджа: вкл' : '🏆 Режим челленджа: выкл',
+          callback_data: 'challenge_mode:toggle',
+        },
+      ],
+    ],
   };
 
   return ctx.reply(`${describeProfile(user)}${extrasBlock}`, { reply_markup: keyboard });
 }
 
 bot.command('profile', (ctx) => sendProfile(ctx));
+
+const CHALLENGE_MODE_ON_TEXT =
+  '🏆 Режим челленджа включён.\n\nПравило: даже если по плану сегодня официальный отдых — без короткой зарядки или растяжки (10-15 минут) день не пойдёт в серию. Так привычка не сбивается в дни без спорта.';
+const CHALLENGE_MODE_OFF_TEXT = 'Режим челленджа выключен — дни планового отдыха снова просто идут в серию без доп. действий.';
+
+bot.action('challenge_mode:toggle', async (ctx) => {
+  await ctx.answerCbQuery();
+  const user = getUser(ctx.from.id);
+  if (!user || !isProfileComplete(user)) return;
+  const next = !user.challenge_mode;
+  setChallengeMode(ctx.from.id, next);
+  return ctx.reply(next ? CHALLENGE_MODE_ON_TEXT : CHALLENGE_MODE_OFF_TEXT);
+});
 
 bot.command('connect_strava', (ctx) => {
   const user = getUser(ctx.from.id);
