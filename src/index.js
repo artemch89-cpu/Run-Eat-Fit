@@ -13,6 +13,9 @@ import {
   markDayCloseSent,
   setPendingEditField,
   clearPendingEditField,
+  setChallengeMode,
+  getProfileCompleteUsers,
+  topUpStreakFreebie,
 } from './db.js';
 import {
   getNextStep,
@@ -32,6 +35,7 @@ import {
   PROFILE_FIELD_LABELS,
 } from './onboarding.js';
 import { getCoachReply, getCheckinTrigger, getDayCloseTrigger, getCoachPhotoReply, BOT_TIMEZONE } from './coach.js';
+import { finalizeDay } from './streak.js';
 import { buildAuthorizeUrl } from './strava.js';
 import { createWebhookServer } from './webhookServer.js';
 
@@ -40,6 +44,9 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // Фиксированное время для всех на старте (не поле анкеты — не усложняем
 // онбординг). Если понадобится гибче — привязать к checkin_time юзера.
 const DAY_CLOSE_TIME = '21:00';
+// Позже dayCloseTick (21:00) — даём весь вечер на ответ, прежде чем код сам
+// окончательно решит судьбу дня (finalizeDay) и, если нужно, спишет пропуск.
+const STREAK_FINALIZE_TIME = '23:55';
 
 async function sendFormatted(telegram, chatId, text) {
   try {
@@ -114,6 +121,26 @@ async function dayCloseTick() {
       await sendCoachReply(bot.telegram, user.telegram_id, reply);
     } catch (err) {
       console.error('Day-close trigger failed for', user.telegram_id, err);
+    }
+  }
+}
+
+// Раз в день окончательно решает судьбу серии за сегодня: если факта о
+// тренировке всё ещё нет (юзер не отчитался даже после dayCloseTick),
+// finalizeDay сам решает — плановый отдых без режима челленджа бесплатен,
+// иначе день гасится банком пропусков или рвёт серию. Плюс пополняет банк
+// пропусков на неделю (topUpStreakFreebie сам следит, чтобы не чаще раза
+// в 7 дней). Идёт одним тиком на всех — на масштабе десятков юзеров дешевле
+// отдельного планировщика на каждого.
+async function streakFinalizeTick() {
+  const { hhmm, today } = belgradeNowParts();
+  if (hhmm !== STREAK_FINALIZE_TIME) return;
+  for (const user of getProfileCompleteUsers()) {
+    try {
+      finalizeDay(user.telegram_id, today);
+      topUpStreakFreebie(user.telegram_id, today);
+    } catch (err) {
+      console.error('Streak finalize failed for', user.telegram_id, err);
     }
   }
 }
@@ -396,6 +423,7 @@ webhookServer.listen(process.env.WEBHOOK_PORT || 3000, () => {
 
 setInterval(checkinTick, 60 * 1000);
 setInterval(dayCloseTick, 60 * 1000);
+setInterval(streakFinalizeTick, 60 * 1000);
 
 function shutdown(signal) {
   bot.stop(signal);
