@@ -249,6 +249,9 @@ bot.on('text', async (ctx) => {
   }
   if (step) return;
 
+  const photoWait = photoBusy.get(ctx.from.id);
+  if (photoWait) await photoWait;
+
   addMessage(ctx.from.id, 'user', ctx.message.text);
   const history = getHistory(ctx.from.id);
   try {
@@ -270,6 +273,28 @@ bot.on('text', async (ctx) => {
 // гонки между апдейтами одной группы исключены, пока тут нет await.
 const ALBUM_DEBOUNCE_MS = 1200; // Telegram обычно доставляет альбом за < 1с, запас на сеть
 const pendingPhotoGroups = new Map(); // `${telegramId}:${mediaGroupId}` -> { photos, ctx, timer }
+
+// Гонка 22.09.2026: пока альбом ещё копится/обрабатывается, юзер успевает
+// написать текстом — bot.on('text') не знал про фото и звал коуча без
+// картинок, видя в истории только плейсхолдер [Фото x5]. Модель, не получив
+// реальных пикселей, сама придумывала «не могу разобрать цифры» — юзеру
+// приходило два противоречащих ответа подряд, хотя фото распознались верно.
+// photoBusy держит по юзеру promise, который резолвится, когда весь цикл
+// (дебаунс + вызов коуча) для текущего батча фото закончен — bot.on('text')
+// дожидается его перед своим вызовом коуча.
+const photoBusy = new Map(); // telegramId -> Promise<void>
+
+function markPhotoBusy(telegramId) {
+  let release;
+  const promise = new Promise((resolve) => {
+    release = resolve;
+  });
+  photoBusy.set(telegramId, promise);
+  return () => {
+    if (photoBusy.get(telegramId) === promise) photoBusy.delete(telegramId);
+    release();
+  };
+}
 
 // Какой размер брать из массива sizes Telegram. По ширине, не по индексу —
 // у скриншотов (в отличие от обычных фото) размерных тиров часто меньше
@@ -340,14 +365,15 @@ bot.on('photo', (ctx) => {
 
   const groupId = ctx.message.media_group_id;
   if (!groupId) {
-    flushPhotoGroup(ctx, ctx.from.id, [photoItem]);
+    const release = markPhotoBusy(ctx.from.id);
+    flushPhotoGroup(ctx, ctx.from.id, [photoItem]).finally(release);
     return;
   }
 
   const key = `${ctx.from.id}:${groupId}`;
   let entry = pendingPhotoGroups.get(key);
   if (!entry) {
-    entry = { photos: [] };
+    entry = { photos: [], release: markPhotoBusy(ctx.from.id) };
     pendingPhotoGroups.set(key, entry);
   }
   entry.photos.push(photoItem);
@@ -356,7 +382,7 @@ bot.on('photo', (ctx) => {
   entry.timer = setTimeout(() => {
     pendingPhotoGroups.delete(key);
     entry.photos.sort((a, b) => a.messageId - b.messageId);
-    flushPhotoGroup(entry.ctx, ctx.from.id, entry.photos);
+    flushPhotoGroup(entry.ctx, ctx.from.id, entry.photos).finally(entry.release);
   }, ALBUM_DEBOUNCE_MS);
 });
 
