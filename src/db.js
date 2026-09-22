@@ -75,6 +75,28 @@ try {
   // колонка уже есть
 }
 
+// Механика серии (стрик): challenge_mode — требует ли день планового отдыха
+// зарядку/растяжку, чтобы засчитаться (решение 23.09.2026). streak_freebies —
+// банк «бесплатных пропусков», пополняется на 1 в неделю до потолка 4
+// (topUpStreakFreebie), тратится на реальный пропуск без него серия рвётся
+// (см. streak.js). last_freebie_topup_date — чтобы не начислять больше
+// одного пополнения за календарную неделю.
+try {
+  db.exec('ALTER TABLE users ADD COLUMN challenge_mode INTEGER DEFAULT 0');
+} catch {
+  // колонка уже есть
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN streak_freebies INTEGER DEFAULT 1');
+} catch {
+  // колонка уже есть
+}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN last_freebie_topup_date TEXT');
+} catch {
+  // колонка уже есть
+}
+
 const WEEKDAY_COLUMNS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 db.exec(`
@@ -127,6 +149,28 @@ for (const column of ['distance_km', 'avg_pace_min_km', 'avg_hr']) {
     // колонка уже есть
   }
 }
+
+// Ставится автоматической доводкой дня (streak.js finalizeDay), когда за день
+// не было отчёта, но в банке был запас «бесплатных пропусков» — день всё
+// равно идёт в серию, просто без реальной активности.
+try {
+  db.exec('ALTER TABLE training_log ADD COLUMN freebie_covered INTEGER DEFAULT 0');
+} catch {
+  // колонка уже есть
+}
+
+// Вехи серии/дистанции, которые уже были отмечены поздравлением — чтобы не
+// поздравлять повторно каждый день после того, как рубеж пройден.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS milestones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    reached_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(telegram_id, type, value)
+  )
+`);
 
 // users.fitness_test_* — снимок последнего теста (перезаписывается, нужен
 // для formatFitnessTestSection). Эта таблица — история ВСЕХ тестов, append-
@@ -293,11 +337,11 @@ export function getTrainingLogForDate(telegramId, date) {
 export function upsertTrainingLog(
   telegramId,
   date,
-  { planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr },
+  { planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr, freebie_covered },
 ) {
   db.prepare(
-    `INSERT INTO training_log (telegram_id, date, planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO training_log (telegram_id, date, planned, status, actual, note, distance_km, avg_pace_min_km, avg_hr, freebie_covered)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(telegram_id, date) DO UPDATE SET
        planned = excluded.planned,
        status = COALESCE(excluded.status, training_log.status),
@@ -306,6 +350,7 @@ export function upsertTrainingLog(
        distance_km = COALESCE(excluded.distance_km, training_log.distance_km),
        avg_pace_min_km = COALESCE(excluded.avg_pace_min_km, training_log.avg_pace_min_km),
        avg_hr = COALESCE(excluded.avg_hr, training_log.avg_hr),
+       freebie_covered = COALESCE(excluded.freebie_covered, training_log.freebie_covered),
        updated_at = CURRENT_TIMESTAMP`,
   ).run(
     telegramId,
@@ -317,6 +362,7 @@ export function upsertTrainingLog(
     distance_km ?? null,
     avg_pace_min_km ?? null,
     avg_hr ?? null,
+    freebie_covered ?? null,
   );
 }
 
@@ -401,6 +447,66 @@ export function getStravaTokensByTelegramId(telegramId) {
 
 export function getStravaTokensByAthleteId(athleteId) {
   return db.prepare('SELECT * FROM strava_tokens WHERE strava_athlete_id = ?').get(athleteId);
+}
+
+export function setChallengeMode(telegramId, enabled) {
+  db.prepare('UPDATE users SET challenge_mode = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, telegramId);
+}
+
+// Все пользователи с завершённой анкетой — используется тиком, который раз в
+// день доводит вчерашний/сегодняшний день до финального статуса (streak.js).
+export function getProfileCompleteUsers() {
+  return db.prepare('SELECT * FROM users WHERE goal IS NOT NULL AND activity IS NOT NULL AND tone IS NOT NULL').all();
+}
+
+// Списывает один пропуск из банка, если он есть. Возвращает true/false —
+// вызывающий код (streak.js) решает по результату, чем закрыть пропущенный день.
+export function spendStreakFreebie(telegramId) {
+  const user = getUser(telegramId);
+  if (!user || !user.streak_freebies || user.streak_freebies <= 0) return false;
+  db.prepare('UPDATE users SET streak_freebies = streak_freebies - 1 WHERE telegram_id = ?').run(telegramId);
+  return true;
+}
+
+function mostRecentMondayISO(todayISO) {
+  const d = new Date(`${todayISO}T12:00:00Z`);
+  const diffFromMonday = (d.getUTCDay() + 6) % 7; // getUTCDay: 0=вс..6=сб
+  d.setUTCDate(d.getUTCDate() - diffFromMonday);
+  return d.toISOString().slice(0, 10);
+}
+
+// Пополняет банк пропусков на 1 (потолок 4), не чаще раза в календарную
+// неделю. Сравнение по дате прошлого пополнения, а не жёсткая привязка к
+// «сегодня понедельник» — переживает то, что тик может пропустить точный день.
+export function topUpStreakFreebie(telegramId, todayISO) {
+  const user = getUser(telegramId);
+  if (!user) return;
+  const monday = mostRecentMondayISO(todayISO);
+  if (user.last_freebie_topup_date && user.last_freebie_topup_date >= monday) return;
+  const next = Math.min((user.streak_freebies || 0) + 1, 4);
+  db.prepare('UPDATE users SET streak_freebies = ?, last_freebie_topup_date = ? WHERE telegram_id = ?').run(
+    next,
+    todayISO,
+    telegramId,
+  );
+}
+
+export function getMilestonesReached(telegramId, type) {
+  const rows = db.prepare('SELECT value FROM milestones WHERE telegram_id = ? AND type = ?').all(telegramId, type);
+  return new Set(rows.map((r) => r.value));
+}
+
+export function addMilestone(telegramId, type, value) {
+  db.prepare('INSERT OR IGNORE INTO milestones (telegram_id, type, value) VALUES (?, ?, ?)').run(telegramId, type, value);
+}
+
+export function getTotalDistanceKm(telegramId) {
+  const row = db
+    .prepare(
+      "SELECT SUM(CAST(distance_km AS REAL)) as total FROM training_log WHERE telegram_id = ? AND distance_km IS NOT NULL",
+    )
+    .get(telegramId);
+  return row?.total || 0;
 }
 
 export default db;
