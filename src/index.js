@@ -65,6 +65,17 @@ async function sendCoachReply(telegram, chatId, reply) {
   }
 }
 
+// Telegram показывает "печатает..." максимум 5 секунд, потом гасит сам.
+// Отправляем каждые 4.5с, пока коуч не ответил — юзер видит непрерывный
+// индикатор на время обработки (обычно 3-15с).
+function keepTyping(telegram, chatId) {
+  telegram.sendChatAction(chatId, 'typing').catch(() => {});
+  const interval = setInterval(() => {
+    telegram.sendChatAction(chatId, 'typing').catch(() => {});
+  }, 4500);
+  return () => clearInterval(interval);
+}
+
 function belgradeNowParts() {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-GB', {
@@ -302,6 +313,7 @@ bot.on('text', async (ctx) => {
 
   addMessage(ctx.from.id, 'user', ctx.message.text);
   const history = getHistory(ctx.from.id);
+  const stopTyping = keepTyping(ctx.telegram, ctx.chat.id);
   try {
     const reply = await getCoachReply(user, history);
     addMessage(ctx.from.id, 'assistant', reply);
@@ -309,6 +321,8 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.error('Coach reply error:', err);
     ctx.reply('Не получилось ответить — сбой на моей стороне. Попробуй ещё раз чуть позже.');
+  } finally {
+    stopTyping();
   }
 });
 
@@ -370,6 +384,7 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
   addMessage(telegramId, 'user', caption ? `[Фото${countSuffix}] ${caption}` : `[Фото${countSuffix}]`);
   const history = getHistory(telegramId);
 
+  const stopTyping = keepTyping(ctx.telegram, ctx.chat.id);
   try {
     const images = [];
     for (const p of photos) {
@@ -397,6 +412,8 @@ async function flushPhotoGroup(ctx, telegramId, photos) {
   } catch (err) {
     console.error('Photo coach reply error:', err);
     ctx.reply('Не получилось разобрать фото — сбой на моей стороне. Попробуй ещё раз чуть позже.');
+  } finally {
+    stopTyping();
   }
 }
 
