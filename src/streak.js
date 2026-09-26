@@ -123,10 +123,24 @@ export function formatStreakSection(user) {
   );
 
   const yesterday = getTrainingLogForDate(user.telegram_id, addDaysISO(belgradeTodayISO(), -1));
-  if (yesterday?.status === 'sick') {
-    lines.push(
-      `Вчера был болен — если сегодня пишет, что стало лучше или снова готов заниматься, обязательно скажи, что прошлая серия не прервалась (${streak} дней), это подбодрит.`,
-    );
+  if (yesterday) {
+    if (yesterday.status === 'done' || yesterday.status === 'partial') {
+      const parts = [];
+      if (yesterday.status === 'partial') parts.push('частично');
+      if (yesterday.distance_km) parts.push(`${yesterday.distance_km} км`);
+      if (yesterday.actual) parts.push(yesterday.actual);
+      const detail = parts.length ? ` (${parts.join(', ')})` : '';
+      lines.push(`Вчера тренировка выполнена${detail} — используй это в утреннем сообщении: скажи живо и тепло, не шаблонно.`);
+    } else if (yesterday.status === 'skipped') {
+      const freebieNote = yesterday.freebie_covered ? 'потрачен бесплатный пропуск' : 'серия обнулена';
+      lines.push(`Вчера тренировка пропущена (${freebieNote}) — поддержи без укора, не акцентируй вину, серия начинается сегодня.`);
+    } else if (yesterday.status === 'rest') {
+      lines.push(`Вчера плановый отдых — серия не прервалась. Можно упомянуть это позитивно в утреннем сообщении.`);
+    } else if (yesterday.status === 'sick') {
+      lines.push(
+        `Вчера был болен — если сегодня пишет, что стало лучше или снова готов заниматься, обязательно скажи, что серия не прервалась (${streak} дней), это подбодрит.`,
+      );
+    }
   }
 
   if (newStreak.length || newKm.length) {
